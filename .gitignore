@@ -28,4 +28,6 @@ result
 # Compiled WASM artifacts
 *.wasm.gz
 
+.fastembed_cache
 meridian-embedding
+meridian.db
