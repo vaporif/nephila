@@ -31,6 +31,7 @@ pub struct App {
     focus: FocusPanel,
     running: bool,
     modal: Modal,
+    needs_clear: bool,
     pending_rollback_agent: Option<AgentId>,
     pending_hitl: HashMap<AgentId, (String, Vec<String>)>,
     goals_dir: PathBuf,
@@ -59,6 +60,7 @@ impl App {
             focus: FocusPanel::default(),
             running: true,
             modal: Modal::default(),
+            needs_clear: false,
             pending_rollback_agent: None,
             pending_hitl: HashMap::new(),
             goals_dir,
@@ -71,6 +73,10 @@ impl App {
 
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
         while self.running {
+            if self.needs_clear {
+                self.needs_clear = false;
+                terminal.clear()?;
+            }
             terminal.draw(|frame| self.draw(frame))?;
 
             if event::poll(Duration::from_millis(100))?
@@ -317,6 +323,7 @@ impl App {
                     crossterm::terminal::EnterAlternateScreen
                 )
                 .ok();
+                self.needs_clear = true;
 
                 match edit_result {
                     Ok(Ok(true)) => {
