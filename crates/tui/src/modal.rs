@@ -28,6 +28,14 @@ pub enum Modal {
         files: Vec<PathBuf>,
         selected: usize,
     },
+    View {
+        title: String,
+        content: String,
+    },
+    ConfirmDelete {
+        path: PathBuf,
+        title: String,
+    },
     Help,
 }
 
@@ -181,6 +189,42 @@ impl Modal {
                 ));
                 Paragraph::new(lines).render(inner, buf);
             }
+            Self::View { title, content } => {
+                let block = Block::default()
+                    .title(format!(" {title} "))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Blue));
+                let inner = block.inner(popup_area);
+                block.render(popup_area, buf);
+
+                let mut lines: Vec<Line<'_>> =
+                    content.lines().map(|l| Line::raw(l.to_string())).collect();
+                lines.push(Line::from(""));
+                lines.push(Line::styled(
+                    " [Esc: Close]",
+                    Style::default().fg(Color::DarkGray),
+                ));
+                Paragraph::new(lines).render(inner, buf);
+            }
+            Self::ConfirmDelete { title, .. } => {
+                let block = Block::default()
+                    .title(" Confirm Delete ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Red));
+                let inner = block.inner(popup_area);
+                block.render(popup_area, buf);
+
+                let lines = vec![
+                    Line::from(""),
+                    Line::from(format!("  Delete \"{title}\"?")),
+                    Line::from(""),
+                    Line::styled(
+                        " [Enter: Delete]  [Esc: Cancel]",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ];
+                Paragraph::new(lines).render(inner, buf);
+            }
             Self::Help => {
                 let block = Block::default()
                     .title(" Help ")
@@ -194,10 +238,14 @@ impl Modal {
                     Line::from("  Up / Down        Navigate items"),
                     Line::from("  Left / Right     Collapse / expand tree"),
                     Line::from("  s                Spawn agent on objective"),
+                    Line::from("  e                Edit objective in $EDITOR"),
+                    Line::from("  v                View objective content"),
+                    Line::from("  x / Del          Delete objective"),
                     Line::from("  k                Kill agent"),
                     Line::from("  p                Pause / resume agent"),
                     Line::from("  r                Rollback to checkpoint"),
                     Line::from("  n                New objective"),
+                    Line::from("  D                Toggle debug log"),
                     Line::from("  Enter            Respond to HITL question"),
                     Line::from("  ?                Toggle help"),
                     Line::from("  q / Ctrl+C       Quit"),

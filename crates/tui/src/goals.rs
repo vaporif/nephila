@@ -145,21 +145,32 @@ pub(crate) fn load_mapping(goals_dir: &Path) -> GoalMapping {
     }
 }
 
-#[cfg(test)]
-fn save_mapping(goals_dir: &Path, mapping: &GoalMapping) -> io::Result<()> {
+pub(crate) fn save_mapping(goals_dir: &Path, mapping: &GoalMapping) -> io::Result<()> {
     let path = goals_dir.join(MAPPING_FILE);
     let json = serde_json::to_string_pretty(mapping).map_err(io::Error::other)?;
     fs::write(path, json)
 }
 
 pub(crate) fn reconcile_with_mapping(goals_dir: &Path, goals: &mut [GoalObjective]) {
-    let mapping = load_mapping(goals_dir);
+    let mut mapping = load_mapping(goals_dir);
+    let mut changed = false;
 
     for goal in goals.iter_mut() {
-        if let Some(filename) = goal.file_path.file_name().and_then(|f| f.to_str())
-            && let Some(id) = mapping.entries.get(filename)
-        {
-            goal.id = Some(*id);
+        if let Some(filename) = goal.file_path.file_name().and_then(|f| f.to_str()) {
+            if let Some(id) = mapping.entries.get(filename) {
+                goal.id = Some(*id);
+            } else {
+                let id = ObjectiveId::new();
+                goal.id = Some(id);
+                mapping.entries.insert(filename.to_string(), id);
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        if let Err(e) = save_mapping(goals_dir, &mapping) {
+            tracing::warn!("Failed to save goals mapping: {e}");
         }
     }
 }

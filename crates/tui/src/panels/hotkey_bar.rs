@@ -21,8 +21,10 @@ pub fn context_line(ctx: &HotkeyContext) -> &'static str {
     match ctx {
         HotkeyContext::Nothing => "",
         HotkeyContext::ObjectivesPanelNoSelection => "S:Spawn (file picker)",
-        HotkeyContext::ObjectiveSelectedNoAgent => "S:Spawn agent on this objective",
-        HotkeyContext::ObjectiveSelectedWithAgent => "K:Kill  P:Pause  R:Rollback  Enter:HITL",
+        HotkeyContext::ObjectiveSelectedNoAgent => "S:Spawn  E:Edit  V:View  X:Delete",
+        HotkeyContext::ObjectiveSelectedWithAgent => {
+            "K:Kill  P:Pause  R:Rollback  Enter:HITL  E:Edit  V:View"
+        }
         HotkeyContext::AgentSelected => "K:Kill  P:Pause  R:Rollback",
         HotkeyContext::AgentSelectedHitlPending => {
             "Enter:Respond to question  K:Kill  P:Pause  R:Rollback"

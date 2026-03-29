@@ -4,6 +4,7 @@ pub mod layout;
 pub mod modal;
 pub mod panels;
 pub mod tui_command;
+pub mod tui_tracing;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ use crate::panels::event_log::{EventLogState, EventLogWidget};
 use crate::panels::hotkey_bar::{HotkeyBarWidget, HotkeyContext};
 use crate::panels::objective_tree::{ObjectiveTreeState, ObjectiveTreeWidget};
 use crate::tui_command::TuiCommand;
+use crate::tui_tracing::TuiLogBuffer;
 
 pub struct App {
     event_rx: broadcast::Receiver<BusEvent>,
@@ -32,6 +34,9 @@ pub struct App {
     running: bool,
     modal: Modal,
     needs_clear: bool,
+    show_debug: bool,
+    debug_scroll: usize,
+    debug_log: TuiLogBuffer,
     pending_rollback_agent: Option<AgentId>,
     pending_hitl: HashMap<AgentId, (String, Vec<String>)>,
     goals_dir: PathBuf,
@@ -46,6 +51,7 @@ impl App {
         event_rx: broadcast::Receiver<BusEvent>,
         cmd_tx: mpsc::Sender<TuiCommand>,
         working_dir: PathBuf,
+        debug_log: TuiLogBuffer,
     ) -> Self {
         let goals_dir = working_dir.join("goals");
         let mut goals = goals::scan_goals_dir(&goals_dir).unwrap_or_default();
@@ -61,6 +67,9 @@ impl App {
             running: true,
             modal: Modal::default(),
             needs_clear: false,
+            show_debug: false,
+            debug_scroll: 0,
+            debug_log,
             pending_rollback_agent: None,
             pending_hitl: HashMap::new(),
             goals_dir,
@@ -135,6 +144,52 @@ impl App {
         frame.render_widget(hotkey_widget, layout.hotkey_bar);
 
         self.modal.render(frame.area(), frame.buffer_mut());
+
+        if self.show_debug {
+            self.render_debug_overlay(frame);
+        }
+    }
+
+    fn render_debug_overlay(&self, frame: &mut Frame) {
+        use ratatui::style::{Color, Style};
+        use ratatui::text::Line;
+        use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
+
+        let area = frame.area();
+        let height = (area.height / 2).max(5);
+        let overlay = ratatui::layout::Rect {
+            x: 0,
+            y: area.height.saturating_sub(height),
+            width: area.width,
+            height,
+        };
+
+        Clear.render(overlay, frame.buffer_mut());
+
+        let block = Block::default()
+            .title(" Debug Log (D:close) ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Red));
+        let inner = block.inner(overlay);
+        block.render(overlay, frame.buffer_mut());
+
+        let all_lines = self.debug_log.lines();
+        let visible_height = inner.height as usize;
+        let total = all_lines.len();
+        let start = if self.debug_scroll > 0 {
+            total.saturating_sub(visible_height).saturating_sub(self.debug_scroll)
+        } else {
+            total.saturating_sub(visible_height)
+        };
+
+        let lines: Vec<Line<'_>> = all_lines
+            .into_iter()
+            .skip(start)
+            .take(visible_height)
+            .map(|l| Line::styled(l, Style::default().fg(Color::DarkGray)))
+            .collect();
+
+        Paragraph::new(lines).render(inner, frame.buffer_mut());
     }
 
     fn compute_hotkey_context(&self) -> HotkeyContext {
@@ -178,6 +233,25 @@ impl App {
     }
 
     async fn handle_key(&mut self, key: KeyEvent) {
+        if self.show_debug {
+            match key.code {
+                KeyCode::Char('D') | KeyCode::Esc => {
+                    self.show_debug = false;
+                    self.debug_scroll = 0;
+                    return;
+                }
+                KeyCode::Up => {
+                    self.debug_scroll = self.debug_scroll.saturating_add(1);
+                    return;
+                }
+                KeyCode::Down => {
+                    self.debug_scroll = self.debug_scroll.saturating_sub(1);
+                    return;
+                }
+                _ => return,
+            }
+        }
+
         if self.modal.is_open() {
             self.handle_modal_key(key).await;
             return;
@@ -207,6 +281,10 @@ impl App {
             }
             KeyCode::Char('?') => {
                 self.modal = Modal::Help;
+                return;
+            }
+            KeyCode::Char('D') => {
+                self.show_debug = true;
                 return;
             }
             _ => {}
@@ -301,7 +379,20 @@ impl App {
                     }
                 }
             }
-            Modal::Help | Modal::None => {}
+            Modal::ConfirmDelete { path, title } => {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {
+                        self.event_log.push(format!("Deleted \"{title}\""));
+                        self.goals = goals::scan_goals_dir(&self.goals_dir).unwrap_or_default();
+                        goals::reconcile_with_mapping(&self.goals_dir, &mut self.goals);
+                        self.objective_tree.load_goals(&self.goals);
+                    }
+                    Err(e) => {
+                        self.event_log.push(format!("Failed to delete: {e}"));
+                    }
+                }
+            }
+            Modal::View { .. } | Modal::Help | Modal::None => {}
         }
     }
 
@@ -369,6 +460,15 @@ impl App {
             KeyCode::Char('r') => {
                 self.handle_rollback_from_objective().await;
             }
+            KeyCode::Char('e') => {
+                self.handle_edit_objective().await;
+            }
+            KeyCode::Char('v') => {
+                self.handle_view_objective();
+            }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                self.handle_delete_objective();
+            }
             KeyCode::Enter => {
                 self.handle_hitl_from_objective();
             }
@@ -376,11 +476,90 @@ impl App {
         }
     }
 
+    fn selected_goal_file(&self) -> Option<PathBuf> {
+        self.objective_tree
+            .panel
+            .selected()
+            .and_then(|item| match &item.data {
+                ObjectiveItem::Root(g) => Some(g.file_path.clone()),
+                ObjectiveItem::Sub(_) => None,
+            })
+    }
+
+    async fn handle_edit_objective(&mut self) {
+        let Some(path) = self.selected_goal_file() else {
+            self.event_log.push("Select a root objective to edit".into());
+            return;
+        };
+
+        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::LeaveAlternateScreen
+        );
+
+        let _ = tokio::task::spawn_blocking(move || goals::open_in_editor(&path)).await;
+
+        crossterm::terminal::enable_raw_mode().ok();
+        crossterm::execute!(
+            std::io::stdout(),
+            crossterm::terminal::EnterAlternateScreen
+        )
+        .ok();
+        self.needs_clear = true;
+
+        self.goals = goals::scan_goals_dir(&self.goals_dir).unwrap_or_default();
+        goals::reconcile_with_mapping(&self.goals_dir, &mut self.goals);
+        self.objective_tree.load_goals(&self.goals);
+        self.event_log.push("Objective reloaded".into());
+    }
+
+    fn handle_view_objective(&mut self) {
+        let Some(item) = self.objective_tree.panel.selected() else {
+            return;
+        };
+        let (title, content) = match &item.data {
+            ObjectiveItem::Root(g) => (g.title.clone(), g.content.clone()),
+            ObjectiveItem::Sub(s) => (s.description.clone(), s.description.clone()),
+        };
+        self.modal = Modal::View { title, content };
+    }
+
+    fn handle_delete_objective(&mut self) {
+        let Some(item) = self.objective_tree.panel.selected() else {
+            return;
+        };
+        match &item.data {
+            ObjectiveItem::Root(g) => {
+                if g.agent_id.is_some() {
+                    self.event_log
+                        .push("Cannot delete objective with active agent".into());
+                    return;
+                }
+                self.modal = Modal::ConfirmDelete {
+                    path: g.file_path.clone(),
+                    title: g.title.clone(),
+                };
+            }
+            ObjectiveItem::Sub(_) => {
+                self.event_log
+                    .push("Cannot delete sub-objectives directly".into());
+            }
+        }
+    }
+
     async fn handle_spawn(&mut self) {
+        tracing::debug!(
+            cursor = self.objective_tree.panel.cursor,
+            items = self.objective_tree.panel.items.len(),
+            "handle_spawn called"
+        );
+
         let selected_data = self.objective_tree.panel.selected().map(|item| {
             (
                 item.data.objective_id(),
                 item.data.agent_id(),
+                item.data.title().to_string(),
                 match &item.data {
                     ObjectiveItem::Root(g) => g.content.clone(),
                     ObjectiveItem::Sub(s) => s.description.clone(),
@@ -389,7 +568,9 @@ impl App {
         });
 
         match selected_data {
-            Some((oid, agent, content)) => {
+            Some((oid, agent, title, content)) => {
+                tracing::debug!(?oid, ?agent, %title, "selected objective");
+
                 if agent.is_some() {
                     self.event_log
                         .push("Objective already has an active agent".into());
@@ -398,6 +579,7 @@ impl App {
 
                 match oid {
                     Some(id) => {
+                        tracing::debug!(?id, "sending Spawn command");
                         self.send_command(TuiCommand::Spawn {
                             objective_id: id,
                             content,
@@ -561,7 +743,9 @@ impl App {
     }
 
     async fn send_command(&mut self, cmd: TuiCommand) -> bool {
+        tracing::debug!(?cmd, "sending command");
         if self.cmd_tx.send(cmd).await.is_err() {
+            tracing::warn!("command channel closed");
             self.event_log.push("Command channel closed".into());
             return false;
         }

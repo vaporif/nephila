@@ -22,11 +22,18 @@ struct Cli {
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    let tui_log = meridian_tui::tui_tracing::TuiLogBuffer::new();
+    let tui_layer = meridian_tui::tui_tracing::TuiTracingLayer::new(tui_log.clone());
+
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    tracing_subscriber::registry()
+        .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "meridian=info".into()),
+                .unwrap_or_else(|_| "meridian=debug".into()),
         )
+        .with(tui_layer)
         .init();
 
     let cli = Cli::parse();
@@ -71,7 +78,7 @@ async fn main() -> Result<()> {
 
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut terminal = ratatui::init();
-    let mut app = meridian_tui::App::new(event_rx, cmd_tx, working_dir);
+    let mut app = meridian_tui::App::new(event_rx, cmd_tx, working_dir, tui_log);
     let tui_result = app.run(&mut terminal).await;
     ratatui::restore();
 
