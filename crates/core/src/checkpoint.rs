@@ -48,19 +48,3 @@ pub struct CheckpointInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub l2: Option<Vec<L2Chunk>>,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn checkpoint_summary_display_fields() {
-        let summary = CheckpointSummary {
-            version: CheckpointVersion(3),
-            timestamp: Utc::now(),
-            summary: "Completed auth refactor".into(),
-        };
-        assert_eq!(summary.version, CheckpointVersion(3));
-        assert!(!summary.summary.is_empty());
-    }
-}

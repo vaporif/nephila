@@ -77,7 +77,7 @@ impl ObjectiveTreeState {
 }
 
 #[cfg(test)]
-pub fn flatten_objectives(goals: &[GoalObjective]) -> Vec<FlatTreeItem<ObjectiveItem>> {
+fn flatten_objectives(goals: &[GoalObjective]) -> Vec<FlatTreeItem<ObjectiveItem>> {
     let expanded = vec![true; goals.len()];
     flatten_objectives_with_expanded(goals, &expanded)
 }

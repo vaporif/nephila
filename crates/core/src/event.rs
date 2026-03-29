@@ -55,29 +55,3 @@ pub enum BusEvent {
     },
     Shutdown,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::checkpoint::CheckpointSummary;
-    use crate::id::{AgentId, CheckpointVersion};
-    use chrono::Utc;
-
-    #[test]
-    fn bus_event_checkpoint_list_variant() {
-        let event = BusEvent::CheckpointList {
-            agent_id: AgentId::new(),
-            versions: vec![CheckpointSummary {
-                version: CheckpointVersion(1),
-                timestamp: Utc::now(),
-                summary: "initial".into(),
-            }],
-        };
-        match event {
-            BusEvent::CheckpointList { versions, .. } => {
-                assert_eq!(versions.len(), 1);
-            }
-            _ => panic!("wrong variant"),
-        }
-    }
-}

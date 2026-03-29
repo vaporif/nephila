@@ -130,11 +130,11 @@ pub fn create_template_file(goals_dir: &Path) -> io::Result<PathBuf> {
 const MAPPING_FILE: &str = ".meridian-goals.json";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-pub struct GoalMapping {
-    pub entries: HashMap<String, ObjectiveId>,
+pub(crate) struct GoalMapping {
+    pub(crate) entries: HashMap<String, ObjectiveId>,
 }
 
-pub fn load_mapping(goals_dir: &Path) -> GoalMapping {
+pub(crate) fn load_mapping(goals_dir: &Path) -> GoalMapping {
     let path = goals_dir.join(MAPPING_FILE);
     match fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str(&content).unwrap_or_else(|e| {
@@ -145,13 +145,14 @@ pub fn load_mapping(goals_dir: &Path) -> GoalMapping {
     }
 }
 
-pub fn save_mapping(goals_dir: &Path, mapping: &GoalMapping) -> io::Result<()> {
+#[cfg(test)]
+fn save_mapping(goals_dir: &Path, mapping: &GoalMapping) -> io::Result<()> {
     let path = goals_dir.join(MAPPING_FILE);
     let json = serde_json::to_string_pretty(mapping).map_err(io::Error::other)?;
     fs::write(path, json)
 }
 
-pub fn reconcile_with_mapping(goals_dir: &Path, goals: &mut [GoalObjective]) {
+pub(crate) fn reconcile_with_mapping(goals_dir: &Path, goals: &mut [GoalObjective]) {
     let mapping = load_mapping(goals_dir);
 
     for goal in goals.iter_mut() {

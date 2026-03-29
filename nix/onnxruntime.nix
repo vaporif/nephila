@@ -1,4 +1,4 @@
-# Pre-built ONNX Runtime 1.20.0 for use with the `ort` crate (v2.0.0-rc.9).
+# Pre-built ONNX Runtime for use with the `ort` crate.
 {
   lib,
   stdenv,

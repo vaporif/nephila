@@ -250,8 +250,8 @@ impl App {
                         return;
                     }
                     self.pending_hitl.remove(&agent_id);
-                    if let Some(item) = self.agent_tree.items.iter_mut().find(|i| i.data.id == agent_id) {
-                        item.data.hitl_pending = false;
+                    if let Some(agent) = self.find_agent_mut(&agent_id) {
+                        agent.hitl_pending = false;
                     }
                 }
             }
@@ -311,7 +311,6 @@ impl App {
                 let edit_result =
                     tokio::task::spawn_blocking(move || goals::open_in_editor(&path)).await;
 
-                // Always restore terminal state, even on panic/error
                 crossterm::terminal::enable_raw_mode().ok();
                 crossterm::execute!(
                     std::io::stdout(),
@@ -458,25 +457,29 @@ impl App {
     }
 
     async fn handle_rollback_from_objective(&mut self) {
-        if self.pending_rollback_agent.is_some() {
-            return;
-        }
         let aid = self
             .objective_tree
             .panel
             .selected()
             .and_then(|item| item.data.agent_id());
         if let Some(aid) = aid {
-            self.pending_rollback_agent = Some(aid);
-            if self
-                .cmd_tx
-                .send(TuiCommand::ListCheckpoints { agent_id: aid })
-                .await
-                .is_err()
-            {
-                self.pending_rollback_agent = None;
-                self.event_log.push("Command channel closed".into());
-            }
+            self.initiate_rollback(aid).await;
+        }
+    }
+
+    async fn initiate_rollback(&mut self, aid: AgentId) {
+        if self.pending_rollback_agent.is_some() {
+            return;
+        }
+        self.pending_rollback_agent = Some(aid);
+        if self
+            .cmd_tx
+            .send(TuiCommand::ListCheckpoints { agent_id: aid })
+            .await
+            .is_err()
+        {
+            self.pending_rollback_agent = None;
+            self.event_log.push("Command channel closed".into());
         }
     }
 
@@ -526,21 +529,9 @@ impl App {
                 }
             }
             KeyCode::Char('r') => {
-                if self.pending_rollback_agent.is_some() {
-                    return;
-                }
                 let aid = self.agent_tree.selected().map(|item| item.data.id);
                 if let Some(aid) = aid {
-                    self.pending_rollback_agent = Some(aid);
-                    if self
-                        .cmd_tx
-                        .send(TuiCommand::ListCheckpoints { agent_id: aid })
-                        .await
-                        .is_err()
-                    {
-                        self.pending_rollback_agent = None;
-                        self.event_log.push("Command channel closed".into());
-                    }
+                    self.initiate_rollback(aid).await;
                 }
             }
             KeyCode::Enter => {
@@ -568,6 +559,14 @@ impl App {
             return false;
         }
         true
+    }
+
+    fn find_agent_mut(&mut self, agent_id: &AgentId) -> Option<&mut crate::panels::agent_tree::AgentTreeNode> {
+        self.agent_tree
+            .items
+            .iter_mut()
+            .find(|i| i.data.id == *agent_id)
+            .map(|i| &mut i.data)
     }
 
     fn try_open_hitl_modal(&mut self, agent_id: AgentId) {
@@ -604,8 +603,8 @@ impl App {
                 old_state: _,
                 new_state,
             } => {
-                if let Some(item) = self.agent_tree.items.iter_mut().find(|i| i.data.id == *agent_id) {
-                    item.data.state = *new_state;
+                if let Some(agent) = self.find_agent_mut(agent_id) {
+                    agent.state = *new_state;
                 }
                 self.event_log
                     .push(format!("[{agent_id}] state -> {new_state}"));
@@ -615,9 +614,9 @@ impl App {
                 used,
                 remaining,
             } => {
-                if let Some(item) = self.agent_tree.items.iter_mut().find(|i| i.data.id == *agent_id) {
-                    item.data.tokens_used = Some(*used);
-                    item.data.tokens_remaining = Some(*remaining);
+                if let Some(agent) = self.find_agent_mut(agent_id) {
+                    agent.tokens_used = Some(*used);
+                    agent.tokens_remaining = Some(*remaining);
                 }
             }
             BusEvent::HitlRequested {
@@ -625,8 +624,8 @@ impl App {
                 question,
                 options,
             } => {
-                if let Some(item) = self.agent_tree.items.iter_mut().find(|i| i.data.id == *agent_id) {
-                    item.data.hitl_pending = true;
+                if let Some(agent) = self.find_agent_mut(agent_id) {
+                    agent.hitl_pending = true;
                 }
                 self.pending_hitl
                     .insert(*agent_id, (question.clone(), options.clone()));
@@ -640,8 +639,8 @@ impl App {
                 response,
             } => {
                 self.pending_hitl.remove(agent_id);
-                if let Some(item) = self.agent_tree.items.iter_mut().find(|i| i.data.id == *agent_id) {
-                    item.data.hitl_pending = false;
+                if let Some(agent) = self.find_agent_mut(agent_id) {
+                    agent.hitl_pending = false;
                 }
                 self.event_log
                     .push(format!("[{agent_id}] HITL response: {response}"));

@@ -13,7 +13,7 @@ impl FastEmbedder {
     pub fn new(model_name: &str) -> Result<Self> {
         let embedding_model: EmbeddingModel = model_name
             .parse()
-            .map_err(|e: String| MeridianError::Embedding(e))?;
+            .map_err(MeridianError::Embedding)?;
 
         let model_info = TextEmbedding::get_model_info(&embedding_model)
             .map_err(|e| MeridianError::Embedding(e.to_string()))?;

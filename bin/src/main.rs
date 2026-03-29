@@ -59,19 +59,13 @@ async fn main() -> Result<()> {
     );
 
     let (event_tx, event_rx) = broadcast::channel::<BusEvent>(1024);
-    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<meridian_tui::tui_command::TuiCommand>(256);
+    let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel::<meridian_tui::tui_command::TuiCommand>(256);
 
     let _mcp_server = meridian_mcp::server::MeridianMcpServer::new(
         store.clone(),
         event_tx.clone(),
         config.clone(),
     );
-
-    tokio::spawn(async move {
-        while let Some(cmd) = cmd_rx.recv().await {
-            tracing::info!("TUI command received (not yet handled): {cmd:?}");
-        }
-    });
 
     tracing::info!("Meridian initialized, starting TUI...");
 
