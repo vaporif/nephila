@@ -4,7 +4,7 @@ An agent runtime that lets LLMs work past their context window.
 
 ## The problem
 
-LLM agents accumulate state in their context window. Around 150-200k tokens, they start degrading - lossy summaries, hallucinations, or they just stop being useful. If your task takes hours or days, a single context window won't cut it.
+LLM agents accumulate state in their context window. Around 1O0-150k tokens, they start degrading - lossy summaries, hallucinations, or they just stop being useful. If your task takes hours or days, a single context window won't cut it even with compaction.
 
 ## What Meridian does
 
@@ -72,17 +72,6 @@ graph TB
 7. New agent pulls L2 memories as needed through vector search
 
 If the agent crashes or ignores instructions, Meridian force-kills at 85% and uses a heuristic crash summarizer instead.
-
-## Crate layout
-
-| Crate | What it does |
-|---|---|
-| `meridian-core` | Types, traits, config, error handling |
-| `meridian-store` | SQLite persistence with sqlite-vec for vector search |
-| `meridian-lifecycle` | Process supervision, token tracking, crash recovery |
-| `meridian-mcp` | MCP server over streamable HTTP, tool definitions |
-| `meridian-tui` | Terminal UI with ratatui |
-| `meridian-bin` | CLI entry point, wires everything together |
 
 ## Design choices
 

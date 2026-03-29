@@ -1,13 +1,13 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/meridian-core",
-    "crates/meridian-store",
-    "crates/meridian-embedding",
-    "crates/meridian-lifecycle",
-    "crates/meridian-mcp",
-    "crates/meridian-tui",
-    "crates/meridian-bin",
+    "crates/core",
+    "crates/store",
+    "crates/embedding",
+    "crates/lifecycle",
+    "crates/mcp",
+    "crates/tui",
+    "bin",
 ]
 
 [workspace.package]
@@ -17,12 +17,12 @@ license = "MIT"
 
 [workspace.dependencies]
 # Internal
-meridian-core = { path = "crates/meridian-core" }
-meridian-store = { path = "crates/meridian-store" }
-meridian-embedding = { path = "crates/meridian-embedding" }
-meridian-lifecycle = { path = "crates/meridian-lifecycle" }
-meridian-mcp = { path = "crates/meridian-mcp" }
-meridian-tui = { path = "crates/meridian-tui" }
+meridian-core = { path = "crates/core" }
+meridian-store = { path = "crates/store" }
+meridian-embedding = { path = "crates/embedding" }
+meridian-lifecycle = { path = "crates/lifecycle" }
+meridian-mcp = { path = "crates/mcp" }
+meridian-tui = { path = "crates/tui" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
