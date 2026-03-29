@@ -1,0 +1,19 @@
+[package]
+name = "meridian-store"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+meridian-core = { workspace = true, features = ["rusqlite"] }
+rusqlite = { workspace = true }
+sqlite-vec = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

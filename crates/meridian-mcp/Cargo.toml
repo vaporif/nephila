@@ -1,0 +1,17 @@
+[package]
+name = "meridian-mcp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+meridian-core = { workspace = true }
+rmcp = { workspace = true }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+schemars = { workspace = true }

@@ -1,0 +1,36 @@
+[meridian]
+storage_backend = "sqlite"
+sqlite_path = "./meridian.db"
+embedding_model = "Xenova/bge-small-en-v1.5"
+claude_binary = "claude"
+
+[lifecycle]
+context_threshold_pct = 80
+context_window_size = 200000
+token_warn_pct = 60
+token_critical_pct = 75
+token_force_kill_pct = 85
+token_report_interval_normal = 10
+token_report_interval_warn = 3
+token_report_interval_critical = 1
+hang_timeout_secs = 300
+drain_timeout_secs = 60
+
+[supervision]
+default_strategy = "one_for_one"
+max_restarts = 5
+restart_window_secs = 60
+
+[summarizer]
+backend = "claude"
+
+[memory]
+novelty_threshold = 0.95
+link_similarity_threshold = 0.75
+decay_access_threshold = 5
+archive_after_cycles = 50
+
+[tui]
+refresh_rate_ms = 100
+max_event_log_lines = 1000
+max_hitl_rerequests = 3
