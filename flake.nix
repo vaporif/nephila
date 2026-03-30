@@ -63,6 +63,8 @@
       meridianUnwrapped = craneLib.buildPackage (commonArgs
         // {
           inherit cargoArtifacts;
+          # Embedding tests need network (HuggingFace model download)
+          cargoTestExtraArgs = "--workspace --exclude meridian-embedding";
         });
 
       meridian = pkgs.symlinkJoin {
