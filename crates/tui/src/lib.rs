@@ -923,6 +923,20 @@ impl App {
                 self.event_log
                     .push(format!("[{agent_id}] session ready — Enter to attach"));
             }
+            BusEvent::CheckpointSaved {
+                agent_id,
+                version,
+            } => {
+                self.event_log
+                    .push(format!("[{agent_id}] checkpoint saved: {version}"));
+            }
+            BusEvent::ObjectiveUpdated {
+                objective_id,
+                status,
+            } => {
+                self.event_log
+                    .push(format!("[{objective_id}] objective -> {status}"));
+            }
             BusEvent::Shutdown => {
                 self.event_log.push("Shutdown signal received".into());
                 self.running = false;

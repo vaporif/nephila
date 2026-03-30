@@ -1,15 +1,17 @@
-mod service;
+mod orchestrator;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr};
-use meridian_core::agent::AgentCommand;
+use meridian_core::command::OrchestratorCommand;
 use meridian_core::config::MeridianConfig;
 use meridian_core::event::BusEvent;
-use meridian_store::SqliteStore;
-use meridian_tui::tui_command::TuiCommand;
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc};
+use meridian_core::id::AgentId;
+use meridian_mcp::state::HitlRequest;
+use tokio::sync::{RwLock, broadcast, mpsc};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -73,22 +75,31 @@ async fn main() -> Result<()> {
     );
 
     let (event_tx, event_rx) = broadcast::channel::<BusEvent>(1024);
-    let (cmd_tx, cmd_rx) = mpsc::channel::<TuiCommand>(256);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<OrchestratorCommand>(256);
+
+    let hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>> =
+        Arc::new(RwLock::new(HashMap::new()));
 
     let _mcp_server = meridian_mcp::server::MeridianMcpServer::new(
         store.clone(),
+        embedder.clone(),
         event_tx.clone(),
+        cmd_tx.clone(),
+        hitl_requests.clone(),
         config.clone(),
     );
 
     tracing::info!("Meridian initialized, starting TUI...");
 
-    let cmd_handle = tokio::spawn(run_command_handler(
-        cmd_rx,
-        event_tx.clone(),
-        store.clone(),
-        config.clone(),
-    ));
+    let orch_store = store.clone();
+    let orch_event_tx = event_tx.clone();
+    let orch_hitl = hitl_requests.clone();
+    let cmd_handle = tokio::spawn(async move {
+        match orchestrator::Orchestrator::load(orch_store, orch_event_tx, orch_hitl).await {
+            Ok(mut orch) => orch.run(cmd_rx).await,
+            Err(e) => tracing::error!(%e, "failed to load orchestrator"),
+        }
+    });
 
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut terminal = ratatui::init();
@@ -101,58 +112,4 @@ async fn main() -> Result<()> {
 
     tui_result?;
     Ok(())
-}
-
-async fn run_command_handler(
-    mut cmd_rx: mpsc::Receiver<TuiCommand>,
-    event_tx: broadcast::Sender<BusEvent>,
-    store: Arc<SqliteStore>,
-    _config: MeridianConfig,
-) {
-    let mut service = match service::AgentService::load(store, event_tx).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(%e, "failed to load agent service");
-            return;
-        }
-    };
-
-    while let Some(cmd) = cmd_rx.recv().await {
-        tracing::debug!(?cmd, "command handler received");
-
-        let result = match cmd {
-            TuiCommand::Spawn {
-                objective_id,
-                content,
-                dir,
-            } => service
-                .spawn(objective_id, content, dir, None)
-                .await
-                .map(|_| ()),
-            TuiCommand::Kill { agent_id } => service.dispatch(agent_id, AgentCommand::Kill).await,
-            TuiCommand::Pause { agent_id } => service.dispatch(agent_id, AgentCommand::Pause).await,
-            TuiCommand::Resume { agent_id } => {
-                service.dispatch(agent_id, AgentCommand::Resume).await
-            }
-            TuiCommand::Rollback { agent_id, version } => {
-                service
-                    .dispatch(agent_id, AgentCommand::Rollback { version })
-                    .await
-            }
-            TuiCommand::ListCheckpoints { agent_id } => {
-                service.list_checkpoints(agent_id).await;
-                Ok(())
-            }
-            TuiCommand::HitlRespond { agent_id, response } => {
-                service.hitl_respond(agent_id, response);
-                Ok(())
-            }
-        };
-
-        if let Err(e) = result {
-            tracing::error!(%e, "command handler error");
-        }
-    }
-
-    tracing::debug!("command handler exiting");
 }

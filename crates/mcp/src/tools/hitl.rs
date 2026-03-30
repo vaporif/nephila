@@ -1,11 +1,17 @@
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::time::Duration;
 
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::MeridianMcpServer;
+use crate::server::{MeridianMcpServer, parse_agent_id};
+use crate::state::HitlRequest;
+use meridian_core::embedding::EmbeddingProvider;
+use meridian_core::event::BusEvent;
 use meridian_core::store::{
     AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
 };
@@ -45,7 +51,13 @@ impl ToolBase for RequestHumanInputTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for RequestHumanInputTool
+fn hash_question(question: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    question.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for RequestHumanInputTool
 where
     S: AgentStore
         + CheckpointStore
@@ -56,14 +68,67 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(RequestHumanInputOutput {
-            response: "No operator connected".to_owned(),
-            received: false,
-        })
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        let question_hash = hash_question(&params.question);
+
+        let ask_count = service
+            .store
+            .record_ask(agent_id, question_hash)
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        if ask_count > 3 {
+            return Err(ErrorData::invalid_request(
+                "stuck loop detected: question asked more than 3 times".to_owned(),
+                None,
+            ));
+        }
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        {
+            let mut requests = service.hitl_requests.write().await;
+            if requests.contains_key(&agent_id) {
+                return Err(ErrorData::invalid_request(
+                    "another HITL request is already pending for this agent".to_owned(),
+                    None,
+                ));
+            }
+            requests.insert(
+                agent_id,
+                HitlRequest {
+                    question: params.question.clone(),
+                    options: params.options.clone(),
+                    response_tx: tx,
+                },
+            );
+        }
+
+        let _ = service.event_tx.send(BusEvent::HitlRequested {
+            agent_id,
+            question: params.question,
+            options: params.options,
+        });
+
+        let timeout = Duration::from_secs(service.config.lifecycle.hang_timeout_secs);
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(response)) => Ok(RequestHumanInputOutput {
+                response,
+                received: true,
+            }),
+            _ => {
+                service.hitl_requests.write().await.remove(&agent_id);
+                Ok(RequestHumanInputOutput {
+                    response: "timeout".to_owned(),
+                    received: false,
+                })
+            }
+        }
     }
 }

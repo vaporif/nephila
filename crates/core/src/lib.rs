@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod checkpoint;
+pub mod command;
 pub mod config;
 pub mod directive;
 pub mod embedding;

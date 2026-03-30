@@ -9,9 +9,12 @@ use rmcp::model::{
     ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, broadcast, mpsc};
 
+use meridian_core::command::OrchestratorCommand;
 use meridian_core::config::MeridianConfig;
+use meridian_core::embedding::EmbeddingProvider;
+use meridian_core::error::MeridianError;
 use meridian_core::event::BusEvent;
 use meridian_core::id::AgentId;
 use meridian_core::store::{
@@ -25,15 +28,33 @@ use crate::tools::lifecycle::{GetDirectiveTool, ReportTokenEstimateTool, Request
 use crate::tools::memory::{SearchGraphTool, StoreMemoryTool};
 use crate::tools::objective::{GetObjectiveTreeTool, UpdateObjectiveTool};
 
-pub struct MeridianMcpServer<S> {
+pub fn meridian_err(e: MeridianError) -> rmcp::ErrorData {
+    ErrorData::internal_error(e.to_string(), None)
+}
+
+pub fn parse_agent_id(s: &str) -> Result<AgentId, rmcp::ErrorData> {
+    s.parse::<uuid::Uuid>()
+        .map(AgentId)
+        .map_err(|e| ErrorData::invalid_params(format!("invalid agent_id: {e}"), None))
+}
+
+pub fn parse_objective_id(s: &str) -> Result<meridian_core::id::ObjectiveId, rmcp::ErrorData> {
+    s.parse::<uuid::Uuid>()
+        .map(meridian_core::id::ObjectiveId)
+        .map_err(|e| ErrorData::invalid_params(format!("invalid objective_id: {e}"), None))
+}
+
+pub struct MeridianMcpServer<S, E> {
     tool_router: ToolRouter<Self>,
     pub store: Arc<S>,
+    pub embedder: Arc<E>,
     pub event_tx: broadcast::Sender<BusEvent>,
+    pub cmd_tx: mpsc::Sender<OrchestratorCommand>,
     pub hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
     pub config: MeridianConfig,
 }
 
-impl<S> MeridianMcpServer<S>
+impl<S, E> MeridianMcpServer<S, E>
 where
     S: AgentStore
         + CheckpointStore
@@ -44,6 +65,7 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     fn build_tool_router() -> ToolRouter<Self> {
         ToolRouter::new()
@@ -61,20 +83,25 @@ where
 
     pub fn new(
         store: Arc<S>,
+        embedder: Arc<E>,
         event_tx: broadcast::Sender<BusEvent>,
+        cmd_tx: mpsc::Sender<OrchestratorCommand>,
+        hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
         config: MeridianConfig,
     ) -> Self {
         Self {
             tool_router: Self::build_tool_router(),
             store,
+            embedder,
             event_tx,
-            hitl_requests: Arc::new(RwLock::new(HashMap::new())),
+            cmd_tx,
+            hitl_requests,
             config,
         }
     }
 }
 
-impl<S> ServerHandler for MeridianMcpServer<S>
+impl<S, E> ServerHandler for MeridianMcpServer<S, E>
 where
     S: AgentStore
         + CheckpointStore
@@ -85,6 +112,7 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     fn get_info(&self) -> ServerInfo {
         let capabilities = ServerCapabilities::builder()
