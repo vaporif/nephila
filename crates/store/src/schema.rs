@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS agents (
     checkpoint_version INTEGER,
     spawned_by TEXT,
     injected_message TEXT,
+    session_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -97,6 +98,17 @@ pub fn register_sqlite_vec() {
 
 pub fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(SCHEMA)?;
+    migrate(conn)?;
+    Ok(())
+}
+
+fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
+    let has_session_id: bool = conn
+        .prepare("SELECT 1 FROM pragma_table_info('agents') WHERE name = 'session_id'")?
+        .exists([])?;
+    if !has_session_id {
+        conn.execute_batch("ALTER TABLE agents ADD COLUMN session_id TEXT")?;
+    }
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use crate::agent::{AgentRecord, AgentState};
+use crate::agent::{Agent, AgentState};
 use crate::checkpoint::{Checkpoint, L0State, L2Chunk};
 use crate::directive::Directive;
 use crate::error::Result;
@@ -9,14 +9,13 @@ use crate::objective::{NewObjective, ObjectiveNode, ObjectiveStatus, ObjectiveTr
 use chrono::{DateTime, Utc};
 
 pub trait AgentStore: Send + Sync {
-    fn register(&self, agent: AgentRecord) -> impl std::future::Future<Output = Result<()>> + Send;
+    fn register(&self, agent: Agent) -> impl std::future::Future<Output = Result<()>> + Send;
 
-    fn get(
-        &self,
-        id: AgentId,
-    ) -> impl std::future::Future<Output = Result<Option<AgentRecord>>> + Send;
+    fn get(&self, id: AgentId) -> impl std::future::Future<Output = Result<Option<Agent>>> + Send;
 
-    fn list(&self) -> impl std::future::Future<Output = Result<Vec<AgentRecord>>> + Send;
+    fn list(&self) -> impl std::future::Future<Output = Result<Vec<Agent>>> + Send;
+
+    fn save(&self, agent: &Agent) -> impl std::future::Future<Output = Result<()>> + Send;
 
     fn update_state(
         &self,

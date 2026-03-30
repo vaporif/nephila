@@ -1,4 +1,4 @@
-use meridian_core::agent::{AgentRecord, AgentState};
+use meridian_core::agent::{Agent, AgentState};
 use meridian_core::id::{AgentId, CheckpointVersion, ObjectiveId};
 use ratatui::{
     buffer::Buffer,
@@ -113,7 +113,7 @@ fn flatten_recursive<T: Clone>(node: &TreeNode<T>, depth: usize, out: &mut Vec<F
 }
 
 pub fn build_agent_trees(
-    records: &[AgentRecord],
+    records: &[Agent],
     resolve_label: &dyn Fn(ObjectiveId) -> String,
 ) -> Vec<TreeNode<AgentTreeNode>> {
     let mut nodes: HashMap<AgentId, TreeNode<AgentTreeNode>> = HashMap::new();
@@ -274,30 +274,24 @@ mod tests {
         let parent_id = AgentId::new();
         let child_id = AgentId::new();
 
-        let records = vec![
-            AgentRecord {
-                id: parent_id,
-                state: AgentState::Active,
-                directory: PathBuf::from("/tmp"),
-                objective_id: ObjectiveId::new(),
-                checkpoint_version: None,
-                spawned_by: None,
-                injected_message: None,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            },
-            AgentRecord {
-                id: child_id,
-                state: AgentState::Starting,
-                directory: PathBuf::from("/tmp"),
-                objective_id: ObjectiveId::new(),
-                checkpoint_version: None,
-                spawned_by: Some(parent_id),
-                injected_message: None,
-                created_at: Utc::now(),
-                updated_at: Utc::now(),
-            },
-        ];
+        let mut parent = Agent::new(
+            parent_id,
+            ObjectiveId::new(),
+            PathBuf::from("/tmp"),
+            None,
+            None,
+        );
+        parent.state = AgentState::Active;
+
+        let child = Agent::new(
+            child_id,
+            ObjectiveId::new(),
+            PathBuf::from("/tmp"),
+            Some(parent_id),
+            None,
+        );
+
+        let records = vec![parent, child];
 
         let trees = build_agent_trees(&records, &|_| "obj".to_string());
         assert_eq!(trees.len(), 1);

@@ -1,4 +1,4 @@
-use meridian_core::agent::{AgentRecord, AgentState};
+use meridian_core::agent::{Agent, AgentState};
 use meridian_core::checkpoint::{L0State, L2Chunk, ObjectiveSnapshot};
 use meridian_core::directive::Directive;
 use meridian_core::id::*;
@@ -30,17 +30,13 @@ async fn test_full_context_reset_loop() {
     .unwrap();
 
     let agent_id = AgentId::new();
-    let agent = AgentRecord {
-        id: agent_id,
-        state: AgentState::Starting,
-        directory: PathBuf::from("/tmp/agent-1"),
-        objective_id: obj_id,
-        checkpoint_version: None,
-        spawned_by: None,
-        injected_message: None,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-    };
+    let agent = Agent::new(
+        agent_id,
+        obj_id,
+        PathBuf::from("/tmp/agent-1"),
+        None,
+        None,
+    );
     AgentStore::register(&store, agent).await.unwrap();
     ObjectiveStore::assign_agent(&store, obj_id, agent_id)
         .await
@@ -124,17 +120,15 @@ async fn test_full_context_reset_loop() {
     assert_eq!(agent_record.checkpoint_version, Some(CheckpointVersion(1)));
 
     let new_agent_id = AgentId::new();
-    let new_agent = AgentRecord {
-        id: new_agent_id,
-        state: AgentState::Restoring,
-        directory: PathBuf::from("/tmp/agent-2"),
-        objective_id: obj_id,
-        checkpoint_version: Some(version),
-        spawned_by: None,
-        injected_message: None,
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-    };
+    let mut new_agent = Agent::new(
+        new_agent_id,
+        obj_id,
+        PathBuf::from("/tmp/agent-2"),
+        None,
+        None,
+    );
+    new_agent.state = AgentState::Restoring;
+    new_agent.checkpoint_version = Some(version);
     AgentStore::register(&store, new_agent).await.unwrap();
 
     let checkpoint = CheckpointStore::get_latest(&store, agent_id)
@@ -178,17 +172,13 @@ async fn test_multiple_checkpoint_versions() {
     let agent_id = AgentId::new();
     AgentStore::register(
         &store,
-        AgentRecord {
-            id: agent_id,
-            state: AgentState::Active,
-            directory: PathBuf::from("/tmp/test"),
-            objective_id: obj_id,
-            checkpoint_version: None,
-            spawned_by: None,
-            injected_message: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        },
+        Agent::new(
+            agent_id,
+            obj_id,
+            PathBuf::from("/tmp/test"),
+            None,
+            None,
+        ),
     )
     .await
     .unwrap();
@@ -246,17 +236,13 @@ async fn test_hitl_tracking() {
     let agent_id = AgentId::new();
     AgentStore::register(
         &store,
-        AgentRecord {
-            id: agent_id,
-            state: AgentState::Active,
-            directory: PathBuf::from("/tmp/test"),
-            objective_id: obj_id,
-            checkpoint_version: None,
-            spawned_by: None,
-            injected_message: None,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
-        },
+        Agent::new(
+            agent_id,
+            obj_id,
+            PathBuf::from("/tmp/test"),
+            None,
+            None,
+        ),
     )
     .await
     .unwrap();

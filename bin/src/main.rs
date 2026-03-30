@@ -1,12 +1,10 @@
+mod service;
+
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr};
-use meridian_core::agent::{AgentRecord, AgentState};
-use meridian_core::checkpoint::CheckpointSummary;
+use meridian_core::agent::AgentCommand;
 use meridian_core::config::MeridianConfig;
-use meridian_core::directive::Directive;
 use meridian_core::event::BusEvent;
-use meridian_core::id::AgentId;
-use meridian_core::store::{AgentStore, CheckpointStore};
 use meridian_store::SqliteStore;
 use meridian_tui::tui_command::TuiCommand;
 use std::path::PathBuf;
@@ -108,154 +106,49 @@ async fn run_command_handler(
     store: Arc<SqliteStore>,
     _config: MeridianConfig,
 ) {
+    let mut service = match service::AgentService::load(store, event_tx).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(%e, "failed to load agent service");
+            return;
+        }
+    };
 
     while let Some(cmd) = cmd_rx.recv().await {
         tracing::debug!(?cmd, "command handler received");
 
-        match cmd {
+        let result = match cmd {
             TuiCommand::Spawn {
                 objective_id,
                 content,
                 dir,
-            } => {
-                let agent_id = AgentId::new();
-                let session_id = uuid::Uuid::new_v4().to_string();
-
-                let record = AgentRecord {
-                    id: agent_id,
-                    state: AgentState::Active,
-                    directory: dir.clone(),
-                    objective_id,
-                    checkpoint_version: None,
-                    spawned_by: None,
-                    injected_message: Some(content),
-                    created_at: chrono::Utc::now(),
-                    updated_at: chrono::Utc::now(),
-                };
-
-                if let Err(e) = store.register(record).await {
-                    tracing::error!(%agent_id, %e, "failed to register agent");
-                    continue;
-                }
-
-                tracing::info!(%agent_id, %session_id, "agent registered");
-
-                let _ = event_tx.send(BusEvent::AgentStateChanged {
-                    agent_id,
-                    old_state: AgentState::Starting,
-                    new_state: AgentState::Active,
-                });
-                let _ = event_tx.send(BusEvent::AgentSessionReady {
-                    agent_id,
-                    session_id,
-                    directory: dir,
-                });
-            }
-
+            } => service.spawn(objective_id, content, dir, None).await.map(|_| ()),
             TuiCommand::Kill { agent_id } => {
-                let old_state = store
-                    .get(agent_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|r| r.state)
-                    .unwrap_or(AgentState::Active);
-
-                let _ = store.update_state(agent_id, AgentState::Exited).await;
-                let _ = event_tx.send(BusEvent::AgentStateChanged {
-                    agent_id,
-                    old_state,
-                    new_state: AgentState::Exited,
-                });
+                service.dispatch(agent_id, AgentCommand::Kill).await
             }
-
             TuiCommand::Pause { agent_id } => {
-                if let Err(e) = store.set_directive(agent_id, Directive::Pause).await {
-                    tracing::error!(%agent_id, %e, "failed to set pause directive");
-                    continue;
-                }
-
-                let old_state = store
-                    .get(agent_id)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|r| r.state)
-                    .unwrap_or(AgentState::Active);
-
-                let _ = store.update_state(agent_id, AgentState::Paused).await;
-                let _ = event_tx.send(BusEvent::AgentStateChanged {
-                    agent_id,
-                    old_state,
-                    new_state: AgentState::Paused,
-                });
+                service.dispatch(agent_id, AgentCommand::Pause).await
             }
-
             TuiCommand::Resume { agent_id } => {
-                if let Err(e) = store.set_directive(agent_id, Directive::Continue).await {
-                    tracing::error!(%agent_id, %e, "failed to set continue directive");
-                    continue;
-                }
-
-                let _ = store.update_state(agent_id, AgentState::Active).await;
-                let _ = event_tx.send(BusEvent::AgentStateChanged {
-                    agent_id,
-                    old_state: AgentState::Paused,
-                    new_state: AgentState::Active,
-                });
+                service.dispatch(agent_id, AgentCommand::Resume).await
             }
-
-            TuiCommand::ListCheckpoints { agent_id } => {
-                match store.list_versions(agent_id).await {
-                    Ok(versions) => {
-                        let mut summaries = Vec::new();
-                        for v in versions {
-                            if let Ok(Some(cp)) = store.get_version(agent_id, v).await {
-                                summaries.push(CheckpointSummary {
-                                    version: cp.version,
-                                    timestamp: cp.timestamp,
-                                    summary: cp.l1.chars().take(80).collect(),
-                                });
-                            }
-                        }
-                        let _ = event_tx.send(BusEvent::CheckpointList {
-                            agent_id,
-                            versions: summaries,
-                        });
-                    }
-                    Err(e) => {
-                        tracing::error!(%agent_id, %e, "failed to list checkpoints");
-                        let _ = event_tx.send(BusEvent::CheckpointList {
-                            agent_id,
-                            versions: vec![],
-                        });
-                    }
-                }
-            }
-
             TuiCommand::Rollback { agent_id, version } => {
-                if let Err(e) = store.set_checkpoint_version(agent_id, version).await {
-                    tracing::error!(%agent_id, %e, "failed to set rollback version");
-                    continue;
-                }
-                let _ = store.update_state(agent_id, AgentState::Restoring).await;
-                let _ = event_tx.send(BusEvent::AgentStateChanged {
-                    agent_id,
-                    old_state: AgentState::Active,
-                    new_state: AgentState::Restoring,
-                });
-                tracing::info!(%agent_id, ?version, "rollback initiated");
+                service
+                    .dispatch(agent_id, AgentCommand::Rollback { version })
+                    .await
             }
+            TuiCommand::ListCheckpoints { agent_id } => {
+                service.list_checkpoints(agent_id).await;
+                Ok(())
+            }
+            TuiCommand::HitlRespond { agent_id, response } => {
+                service.hitl_respond(agent_id, response);
+                Ok(())
+            }
+        };
 
-            TuiCommand::HitlRespond {
-                agent_id,
-                response,
-            } => {
-                let _ = event_tx.send(BusEvent::HitlResponded {
-                    agent_id,
-                    response,
-                });
-            }
+        if let Err(e) = result {
+            tracing::error!(%e, "command handler error");
         }
     }
 
