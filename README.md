@@ -1,5 +1,8 @@
 # Meridian
 
+[![CI](https://github.com/vaporif/meridian/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/vaporif/meridian/actions/workflows/ci.yml)
+[![Audit](https://github.com/vaporif/meridian/actions/workflows/audit.yml/badge.svg?branch=main)](https://github.com/vaporif/meridian/actions/workflows/audit.yml)
+
 An agent runtime that lets LLMs work past their context window.
 
 ## The problem
