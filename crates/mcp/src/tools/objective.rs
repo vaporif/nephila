@@ -5,7 +5,10 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::MeridianMcpServer;
+use crate::server::{MeridianMcpServer, meridian_err, parse_objective_id};
+use meridian_core::embedding::EmbeddingProvider;
+use meridian_core::event::BusEvent;
+use meridian_core::objective::ObjectiveStatus;
 use meridian_core::store::{
     AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
 };
@@ -38,7 +41,7 @@ impl ToolBase for GetObjectiveTreeTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for GetObjectiveTreeTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for GetObjectiveTreeTool
 where
     S: AgentStore
         + CheckpointStore
@@ -49,14 +52,23 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(GetObjectiveTreeOutput {
-            tree_json: "{}".to_owned(),
-        })
+        let root_id = parse_objective_id(&params.root_id)?;
+
+        let tree = service
+            .store
+            .get_tree(root_id)
+            .await
+            .map_err(meridian_err)?;
+        let tree_json = serde_json::to_string(&tree)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        Ok(GetObjectiveTreeOutput { tree_json })
     }
 }
 
@@ -89,7 +101,7 @@ impl ToolBase for UpdateObjectiveTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for UpdateObjectiveTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for UpdateObjectiveTool
 where
     S: AgentStore
         + CheckpointStore
@@ -100,11 +112,35 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let objective_id = parse_objective_id(&params.objective_id)?;
+
+        let status: ObjectiveStatus = params.status.parse().map_err(|_| {
+            ErrorData::invalid_params(
+                format!(
+                    "invalid status: '{}' (expected: pending, in_progress, done, blocked)",
+                    params.status
+                ),
+                None,
+            )
+        })?;
+
+        service
+            .store
+            .update_status(objective_id, status)
+            .await
+            .map_err(meridian_err)?;
+
+        let _ = service.event_tx.send(BusEvent::ObjectiveUpdated {
+            objective_id,
+            status,
+        });
+
         Ok(UpdateObjectiveOutput { updated: true })
     }
 }

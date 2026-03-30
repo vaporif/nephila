@@ -96,7 +96,7 @@ fn default_sqlite_path() -> PathBuf {
     PathBuf::from("./meridian.db")
 }
 fn default_embedding_model() -> String {
-    "BAAI/bge-small-en-v1.5".into()
+    "BGESmallENV15".into()
 }
 fn default_claude_binary() -> String {
     "claude".into()

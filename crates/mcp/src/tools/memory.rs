@@ -5,7 +5,10 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::MeridianMcpServer;
+use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
+use meridian_core::embedding::EmbeddingProvider;
+use meridian_core::id::EntryId;
+use meridian_core::memory::{LifecycleState, Link, MemoryEntry};
 use meridian_core::store::{
     AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
 };
@@ -52,7 +55,7 @@ impl ToolBase for SearchGraphTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for SearchGraphTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for SearchGraphTool
 where
     S: AgentStore
         + CheckpointStore
@@ -63,12 +66,38 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(SearchGraphOutput { results: vec![] })
+        let embedding = service
+            .embedder
+            .embed(&params.query)
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("embedding failed: {e}"), None))?;
+
+        let search_results = service
+            .store
+            .search(&embedding, params.limit)
+            .await
+            .map_err(meridian_err)?;
+
+        let mut results = Vec::with_capacity(search_results.len());
+        for sr in search_results {
+            if let Err(e) = service.store.increment_access(sr.entry.id).await {
+                tracing::warn!(entry_id = %sr.entry.id, %e, "failed to increment access count");
+            }
+            results.push(SearchGraphResult {
+                entry_id: sr.entry.id.0.to_string(),
+                content: sr.entry.content,
+                score: sr.score,
+                tags: sr.entry.tags,
+            });
+        }
+
+        Ok(SearchGraphOutput { results })
     }
 }
 
@@ -112,7 +141,7 @@ impl ToolBase for StoreMemoryTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for StoreMemoryTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for StoreMemoryTool
 where
     S: AgentStore
         + CheckpointStore
@@ -123,13 +152,57 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let agent_id = parse_agent_id(&params.agent_id)?;
+
+        let embedding = service
+            .embedder
+            .embed(&params.content)
+            .await
+            .map_err(|e| ErrorData::internal_error(format!("embedding failed: {e}"), None))?;
+
+        let entry = MemoryEntry {
+            id: EntryId::new(),
+            agent_id,
+            content: params.content,
+            embedding: embedding.clone(),
+            tags: params.tags,
+            lifecycle_state: LifecycleState::Active,
+            importance: params.importance.clamp(0.0, 1.0),
+            access_count: 0,
+            created_at: chrono::Utc::now(),
+        };
+
+        let entry_id = service.store.store(entry).await.map_err(meridian_err)?;
+
+        let similar = service
+            .store
+            .find_similar(&embedding, 0.8)
+            .await
+            .map_err(meridian_err)?;
+        let links: Vec<Link> = similar
+            .into_iter()
+            .filter(|(id, _)| *id != entry_id)
+            .map(|(target_id, similarity_score)| Link {
+                target_id,
+                similarity_score,
+            })
+            .collect();
+        if !links.is_empty() {
+            service
+                .store
+                .update_links(entry_id, links)
+                .await
+                .map_err(meridian_err)?;
+        }
+
         Ok(StoreMemoryOutput {
-            entry_id: uuid::Uuid::new_v4().to_string(),
+            entry_id: entry_id.0.to_string(),
             stored: true,
         })
     }

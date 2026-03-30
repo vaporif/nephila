@@ -5,7 +5,11 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::MeridianMcpServer;
+use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
+use meridian_core::checkpoint::{L0State, L2Chunk};
+use meridian_core::embedding::EmbeddingProvider;
+use meridian_core::event::BusEvent;
+use meridian_core::id::CheckpointVersion;
 use meridian_core::store::{
     AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
 };
@@ -38,7 +42,7 @@ impl ToolBase for GetSessionCheckpointTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for GetSessionCheckpointTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for GetSessionCheckpointTool
 where
     S: AgentStore
         + CheckpointStore
@@ -49,15 +53,32 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(GetSessionCheckpointOutput {
-            found: false,
-            checkpoint_json: None,
-        })
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        match service
+            .store
+            .get_latest(agent_id)
+            .await
+            .map_err(meridian_err)?
+        {
+            Some(cp) => {
+                let json = serde_json::to_string(&cp)
+                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+                Ok(GetSessionCheckpointOutput {
+                    found: true,
+                    checkpoint_json: Some(json),
+                })
+            }
+            None => Ok(GetSessionCheckpointOutput {
+                found: false,
+                checkpoint_json: None,
+            }),
+        }
     }
 }
 
@@ -95,7 +116,7 @@ impl ToolBase for SerializeAndPersistTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for SerializeAndPersistTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for SerializeAndPersistTool
 where
     S: AgentStore
         + CheckpointStore
@@ -106,14 +127,71 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let agent_id = parse_agent_id(&params.agent_id)?;
+
+        let l0: L0State = match params.l0_json {
+            Some(json) => serde_json::from_str(&json)
+                .map_err(|e| ErrorData::invalid_params(format!("invalid l0_json: {e}"), None))?,
+            None => L0State {
+                objectives: vec![],
+                next_steps: vec![],
+            },
+        };
+
+        let l1 = params.l1_summary.unwrap_or_default();
+
+        let l2_chunks: Vec<L2Chunk> = match params.l2_json {
+            Some(json) => serde_json::from_str(&json)
+                .map_err(|e| ErrorData::invalid_params(format!("invalid l2_json: {e}"), None))?,
+            None => vec![],
+        };
+
+        let versions = service
+            .store
+            .list_versions(agent_id)
+            .await
+            .map_err(meridian_err)?;
+        let version = versions
+            .iter()
+            .max()
+            .map(|v| v.next())
+            .unwrap_or(CheckpointVersion(1));
+
+        let l2_embeddings =
+            if l2_chunks.is_empty() {
+                vec![]
+            } else {
+                let texts: Vec<&str> = l2_chunks.iter().map(|c| c.content.as_str()).collect();
+                service.embedder.embed_batch(&texts).await.map_err(|e| {
+                    ErrorData::internal_error(format!("embedding failed: {e}"), None)
+                })?
+            };
+
+        CheckpointStore::save(
+            service.store.as_ref(),
+            agent_id,
+            version,
+            &l0,
+            &l1,
+            &l2_chunks,
+            &l2_embeddings,
+        )
+        .await
+        .map_err(meridian_err)?;
+
+        let _ = service
+            .event_tx
+            .send(BusEvent::CheckpointSaved { agent_id, version });
+
         Ok(SerializeAndPersistOutput {
             success: true,
-            version: Some(1),
+            version: Some(version.0),
         })
     }
 }

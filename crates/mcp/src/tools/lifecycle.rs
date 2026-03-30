@@ -5,7 +5,11 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::MeridianMcpServer;
+use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
+use meridian_core::command::OrchestratorCommand;
+use meridian_core::directive::Directive;
+use meridian_core::embedding::EmbeddingProvider;
+use meridian_core::event::BusEvent;
 use meridian_core::store::{
     AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
 };
@@ -44,7 +48,7 @@ impl ToolBase for ReportTokenEstimateTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for ReportTokenEstimateTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for ReportTokenEstimateTool
 where
     S: AgentStore
         + CheckpointStore
@@ -55,11 +59,49 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        let total = params.tokens_used + params.tokens_remaining;
+        let pct = if total > 0 {
+            (params.tokens_used * 100 / total) as u8
+        } else {
+            0
+        };
+
+        if pct >= service.config.lifecycle.token_force_kill_pct {
+            if let Err(e) = service
+                .cmd_tx
+                .send(OrchestratorCommand::TokenThreshold {
+                    agent_id,
+                    directive: Directive::Abort,
+                })
+                .await
+            {
+                tracing::warn!(%agent_id, %e, "failed to send token threshold abort command");
+            }
+        } else if pct >= service.config.lifecycle.context_threshold_pct
+            && let Err(e) = service
+                .cmd_tx
+                .send(OrchestratorCommand::TokenThreshold {
+                    agent_id,
+                    directive: Directive::PrepareReset,
+                })
+                .await
+        {
+            tracing::warn!(%agent_id, %e, "failed to send token threshold reset command");
+        }
+
+        let _ = service.event_tx.send(BusEvent::TokenReport {
+            agent_id,
+            used: params.tokens_used,
+            remaining: params.tokens_remaining,
+        });
+
         Ok(ReportTokenEstimateOutput { acknowledged: true })
     }
 }
@@ -98,7 +140,7 @@ impl ToolBase for GetDirectiveTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for GetDirectiveTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for GetDirectiveTool
 where
     S: AgentStore
         + CheckpointStore
@@ -109,15 +151,43 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        let directive = service
+            .store
+            .get_directive(agent_id)
+            .await
+            .map_err(meridian_err)?;
+
+        let reason = match directive {
+            Directive::PrepareReset => Some("token threshold reached".to_owned()),
+            Directive::Pause => Some("paused by operator".to_owned()),
+            Directive::Abort => Some("force kill".to_owned()),
+            Directive::Continue => None,
+        };
+
+        let injected_message = AgentStore::get(service.store.as_ref(), agent_id)
+            .await
+            .map_err(meridian_err)?
+            .and_then(|a| a.injected_message.clone());
+
+        if injected_message.is_some() {
+            service
+                .store
+                .set_injected_message(agent_id, None)
+                .await
+                .map_err(meridian_err)?;
+        }
+
         Ok(GetDirectiveOutput {
-            directive: "continue".to_owned(),
-            reason: None,
-            injected_message: None,
+            directive: directive.to_string(),
+            reason,
+            injected_message,
         })
     }
 }
@@ -149,7 +219,7 @@ impl ToolBase for RequestContextResetTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for RequestContextResetTool
+impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for RequestContextResetTool
 where
     S: AgentStore
         + CheckpointStore
@@ -160,11 +230,21 @@ where
         + Send
         + Sync
         + 'static,
+    E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &MeridianMcpServer<S, E>,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        if let Err(e) = service
+            .cmd_tx
+            .send(OrchestratorCommand::RequestReset { agent_id })
+            .await
+        {
+            tracing::warn!(%agent_id, %e, "failed to send reset command");
+            return Ok(RequestContextResetOutput { accepted: false });
+        }
         Ok(RequestContextResetOutput { accepted: true })
     }
 }
