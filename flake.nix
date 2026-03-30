@@ -58,6 +58,7 @@
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
           ORT_DYLIB_PATH = "${onnxruntime-bin}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
           ORT_LIB_LOCATION = "${onnxruntime-bin}/lib";
+          ORT_PREFER_DYNAMIC_LINK = "1";
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [onnxruntime-bin pkgs.openssl];
@@ -157,6 +158,7 @@
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             ORT_DYLIB_PATH = "${onnxruntime-bin}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
             ORT_LIB_LOCATION = "${onnxruntime-bin}/lib";
+            ORT_PREFER_DYNAMIC_LINK = "1";
           }
           // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
             LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [pkgs.openssl pkgs.stdenv.cc.cc.lib onnxruntime-bin];
