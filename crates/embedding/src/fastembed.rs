@@ -37,7 +37,7 @@ impl EmbeddingProvider for FastEmbedder {
         let model = self.model.clone();
         let text = text.to_owned();
         let mut results = tokio::task::spawn_blocking(move || {
-            let model = model.lock().expect("embedding mutex poisoned");
+            let mut model = model.lock().expect("embedding mutex poisoned");
             model
                 .embed(vec![text], None)
                 .map_err(|e| MeridianError::Embedding(e.to_string()))
@@ -54,7 +54,7 @@ impl EmbeddingProvider for FastEmbedder {
         let model = self.model.clone();
         let texts: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
         tokio::task::spawn_blocking(move || {
-            let model = model.lock().expect("embedding mutex poisoned");
+            let mut model = model.lock().expect("embedding mutex poisoned");
             model
                 .embed(texts, None)
                 .map_err(|e| MeridianError::Embedding(e.to_string()))
