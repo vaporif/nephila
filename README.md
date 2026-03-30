@@ -4,7 +4,7 @@ An agent runtime that lets LLMs work past their context window.
 
 ## The problem
 
-LLM agents accumulate state in their context window. Around 1O0-150k tokens, they start degrading - lossy summaries, hallucinations, or they just stop being useful. If your task takes hours or days, a single context window won't cut it even with compaction.
+LLM agents accumulate state in their context window. Around 100-150k tokens, they start degrading - lossy summaries, hallucinations, or they just stop being useful. If your task takes hours or days, a single context window won't cut it even with compaction.
 
 ## What Meridian does
 
