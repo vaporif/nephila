@@ -1,20 +1,22 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo,
-};
-use rmcp::service::{RequestContext, RoleServer};
 use rmcp::ErrorData;
 use rmcp::ServerHandler;
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, Implementation, ListToolsResult, PaginatedRequestParams,
+    ServerCapabilities, ServerInfo,
+};
+use rmcp::service::{RequestContext, RoleServer};
 use tokio::sync::{RwLock, broadcast};
 
 use meridian_core::config::MeridianConfig;
 use meridian_core::event::BusEvent;
 use meridian_core::id::AgentId;
-use meridian_core::store::{AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore};
+use meridian_core::store::{
+    AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
+};
 
 use crate::state::HitlRequest;
 use crate::tools::checkpoint::{GetSessionCheckpointTool, SerializeAndPersistTool};
@@ -33,7 +35,15 @@ pub struct MeridianMcpServer<S> {
 
 impl<S> MeridianMcpServer<S>
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     fn build_tool_router() -> ToolRouter<Self> {
         ToolRouter::new()
@@ -66,7 +76,15 @@ where
 
 impl<S> ServerHandler for MeridianMcpServer<S>
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     fn get_info(&self) -> ServerInfo {
         let capabilities = ServerCapabilities::builder()
@@ -89,8 +107,7 @@ where
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let tcc =
-            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         self.tool_router.call(tcc).await
     }
 

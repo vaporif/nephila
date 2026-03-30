@@ -1,12 +1,14 @@
 use std::borrow::Cow;
 
+use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
-use rmcp::ErrorData;
 use serde::{Deserialize, Serialize};
 
 use crate::server::MeridianMcpServer;
-use meridian_core::store::{AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore};
+use meridian_core::store::{
+    AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
+};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct ReportTokenEstimateParams {
@@ -35,21 +37,30 @@ impl ToolBase for ReportTokenEstimateTool {
     }
 
     fn description() -> Option<Cow<'static, str>> {
-        Some("Report current token usage so the lifecycle manager knows when to trigger draining.".into())
+        Some(
+            "Report current token usage so the lifecycle manager knows when to trigger draining."
+                .into(),
+        )
     }
 }
 
 impl<S> AsyncTool<MeridianMcpServer<S>> for ReportTokenEstimateTool
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     async fn invoke(
         _service: &MeridianMcpServer<S>,
         _params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(ReportTokenEstimateOutput {
-            acknowledged: true,
-        })
+        Ok(ReportTokenEstimateOutput { acknowledged: true })
     }
 }
 
@@ -81,13 +92,23 @@ impl ToolBase for GetDirectiveTool {
     }
 
     fn description() -> Option<Cow<'static, str>> {
-        Some("Check what the agent should do next: continue, prepare_reset, pause, or abort.".into())
+        Some(
+            "Check what the agent should do next: continue, prepare_reset, pause, or abort.".into(),
+        )
     }
 }
 
 impl<S> AsyncTool<MeridianMcpServer<S>> for GetDirectiveTool
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     async fn invoke(
         _service: &MeridianMcpServer<S>,
@@ -130,7 +151,15 @@ impl ToolBase for RequestContextResetTool {
 
 impl<S> AsyncTool<MeridianMcpServer<S>> for RequestContextResetTool
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     async fn invoke(
         _service: &MeridianMcpServer<S>,

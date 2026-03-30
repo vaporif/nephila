@@ -1,5 +1,5 @@
-use crate::util::parse_rfc3339;
 use crate::SqliteStore;
+use crate::util::parse_rfc3339;
 use chrono::{DateTime, Utc};
 use meridian_core::event::{EventType, McpEvent};
 use meridian_core::id::AgentId;
@@ -64,11 +64,8 @@ impl EventStore for SqliteStore {
                              ORDER BY timestamp DESC
                              LIMIT ?2",
                         )?;
-                        stmt.query_map(
-                            rusqlite::params![agent_id, limit as i64],
-                            row_to_event,
-                        )?
-                        .collect::<Result<Vec<_>, _>>()?
+                        stmt.query_map(rusqlite::params![agent_id, limit as i64], row_to_event)?
+                            .collect::<Result<Vec<_>, _>>()?
                     }
                 };
                 Ok(rows)
@@ -77,10 +74,7 @@ impl EventStore for SqliteStore {
         Ok(events)
     }
 
-    async fn get_tool_calls(
-        &self,
-        agent_id: AgentId,
-    ) -> meridian_core::Result<Vec<McpEvent>> {
+    async fn get_tool_calls(&self, agent_id: AgentId) -> meridian_core::Result<Vec<McpEvent>> {
         let tool_call_type = serde_json::to_string(&EventType::ToolCall)
             .map_err(meridian_core::MeridianError::from)?;
         let events = self
@@ -93,10 +87,7 @@ impl EventStore for SqliteStore {
                      ORDER BY timestamp DESC",
                 )?;
                 let rows = stmt
-                    .query_map(
-                        rusqlite::params![agent_id, tool_call_type],
-                        row_to_event,
-                    )?
+                    .query_map(rusqlite::params![agent_id, tool_call_type], row_to_event)?
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
             })
@@ -242,10 +233,7 @@ mod tests {
             .unwrap();
         assert_eq!(since_mid.len(), 1);
 
-        let since_before = store
-            .get_events(agent_id, Some(before), 10)
-            .await
-            .unwrap();
+        let since_before = store.get_events(agent_id, Some(before), 10).await.unwrap();
         assert_eq!(since_before.len(), 2);
     }
 }

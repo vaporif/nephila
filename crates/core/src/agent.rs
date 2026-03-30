@@ -452,9 +452,11 @@ mod tests {
         assert_eq!(agent.state, AgentState::Restoring);
         assert_eq!(agent.checkpoint_version, Some(version));
         assert_eq!(agent.directive, Directive::PrepareReset);
-        assert!(events
-            .iter()
-            .any(|e| matches!(e, AgentEvent::CheckpointVersionSet { .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::CheckpointVersionSet { .. }))
+        );
     }
 
     #[test]

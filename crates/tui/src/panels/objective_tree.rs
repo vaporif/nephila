@@ -167,11 +167,7 @@ impl StatefulWidget for ObjectiveTreeWidget {
                 let title = item.data.title();
 
                 let arrow = if item.has_children {
-                    if item.is_expanded {
-                        "v "
-                    } else {
-                        "> "
-                    }
+                    if item.is_expanded { "v " } else { "> " }
                 } else {
                     "  "
                 };

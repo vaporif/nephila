@@ -1,12 +1,12 @@
-pub mod schema;
-pub mod writer;
-pub(crate) mod util;
 pub mod agent;
-pub mod objective;
 pub mod checkpoint;
-pub mod memory;
 pub mod event;
 pub mod hitl;
+pub mod memory;
+pub mod objective;
+pub mod schema;
+pub(crate) mod util;
+pub mod writer;
 
 #[cfg(test)]
 pub(crate) mod test_util;

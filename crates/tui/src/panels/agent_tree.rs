@@ -205,11 +205,7 @@ impl StatefulWidget for AgentTreeWidget {
             .map(|(i, item)| {
                 let indent = "  ".repeat(item.depth);
                 let arrow = if item.has_children {
-                    if item.is_expanded {
-                        "v "
-                    } else {
-                        "> "
-                    }
+                    if item.is_expanded { "v " } else { "> " }
                 } else {
                     "  "
                 };

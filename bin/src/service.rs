@@ -105,10 +105,9 @@ impl AgentService {
     }
 
     pub fn hitl_respond(&self, agent_id: AgentId, response: String) {
-        let _ = self.event_tx.send(BusEvent::HitlResponded {
-            agent_id,
-            response,
-        });
+        let _ = self
+            .event_tx
+            .send(BusEvent::HitlResponded { agent_id, response });
     }
 
     fn publish(&self, events: &[AgentEvent]) {

@@ -1,12 +1,14 @@
 use std::borrow::Cow;
 
+use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
-use rmcp::ErrorData;
 use serde::{Deserialize, Serialize};
 
 use crate::server::MeridianMcpServer;
-use meridian_core::store::{AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore};
+use meridian_core::store::{
+    AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
+};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct GetSessionCheckpointParams {
@@ -38,7 +40,15 @@ impl ToolBase for GetSessionCheckpointTool {
 
 impl<S> AsyncTool<MeridianMcpServer<S>> for GetSessionCheckpointTool
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     async fn invoke(
         _service: &MeridianMcpServer<S>,
@@ -87,7 +97,15 @@ impl ToolBase for SerializeAndPersistTool {
 
 impl<S> AsyncTool<MeridianMcpServer<S>> for SerializeAndPersistTool
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     async fn invoke(
         _service: &MeridianMcpServer<S>,

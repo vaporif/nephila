@@ -286,13 +286,15 @@ mod tests {
     fn modal_is_open() {
         assert!(!Modal::None.is_open());
         assert!(Modal::Help.is_open());
-        assert!(Modal::HitlResponse {
-            agent_id: AgentId::new(),
-            question: "q".into(),
-            options: vec!["a".into()],
-            selected: 0,
-        }
-        .is_open());
+        assert!(
+            Modal::HitlResponse {
+                agent_id: AgentId::new(),
+                question: "q".into(),
+                options: vec!["a".into()],
+                selected: 0,
+            }
+            .is_open()
+        );
     }
 
     #[test]

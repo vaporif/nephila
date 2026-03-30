@@ -14,7 +14,10 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 #[derive(Parser)]
-#[command(name = "meridian", about = "Agent orchestration with persistent context")]
+#[command(
+    name = "meridian",
+    about = "Agent orchestration with persistent context"
+)]
 struct Cli {
     /// Config file path
     #[arg(short, long, default_value = "meridian.toml")]
@@ -122,13 +125,12 @@ async fn run_command_handler(
                 objective_id,
                 content,
                 dir,
-            } => service.spawn(objective_id, content, dir, None).await.map(|_| ()),
-            TuiCommand::Kill { agent_id } => {
-                service.dispatch(agent_id, AgentCommand::Kill).await
-            }
-            TuiCommand::Pause { agent_id } => {
-                service.dispatch(agent_id, AgentCommand::Pause).await
-            }
+            } => service
+                .spawn(objective_id, content, dir, None)
+                .await
+                .map(|_| ()),
+            TuiCommand::Kill { agent_id } => service.dispatch(agent_id, AgentCommand::Kill).await,
+            TuiCommand::Pause { agent_id } => service.dispatch(agent_id, AgentCommand::Pause).await,
             TuiCommand::Resume { agent_id } => {
                 service.dispatch(agent_id, AgentCommand::Resume).await
             }

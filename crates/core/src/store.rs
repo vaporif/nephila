@@ -117,7 +117,7 @@ pub trait MemoryStore: Send + Sync {
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
     fn increment_access(&self, id: EntryId)
-        -> impl std::future::Future<Output = Result<()>> + Send;
+    -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 pub trait ObjectiveStore: Send + Sync {

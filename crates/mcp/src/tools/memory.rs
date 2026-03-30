@@ -1,12 +1,14 @@
 use std::borrow::Cow;
 
+use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
-use rmcp::ErrorData;
 use serde::{Deserialize, Serialize};
 
 use crate::server::MeridianMcpServer;
-use meridian_core::store::{AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore};
+use meridian_core::store::{
+    AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
+};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct SearchGraphParams {
@@ -52,7 +54,15 @@ impl ToolBase for SearchGraphTool {
 
 impl<S> AsyncTool<MeridianMcpServer<S>> for SearchGraphTool
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     async fn invoke(
         _service: &MeridianMcpServer<S>,
@@ -104,7 +114,15 @@ impl ToolBase for StoreMemoryTool {
 
 impl<S> AsyncTool<MeridianMcpServer<S>> for StoreMemoryTool
 where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
+    S: AgentStore
+        + CheckpointStore
+        + MemoryStore
+        + ObjectiveStore
+        + EventStore
+        + HitlStore
+        + Send
+        + Sync
+        + 'static,
 {
     async fn invoke(
         _service: &MeridianMcpServer<S>,

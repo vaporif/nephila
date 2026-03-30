@@ -1,5 +1,5 @@
-use crate::util::{bytes_to_f32_vec, f32_slice_to_bytes, parse_rfc3339};
 use crate::SqliteStore;
+use crate::util::{bytes_to_f32_vec, f32_slice_to_bytes, parse_rfc3339};
 use meridian_core::id::EntryId;
 use meridian_core::memory::{Embedding, LifecycleState, Link, MemoryEntry, SearchResult};
 use meridian_core::store::MemoryStore;
@@ -124,22 +124,19 @@ impl MemoryStore for SqliteStore {
                      WHERE embedding MATCH ?1 AND k = ?2",
                 )?;
                 let rows: Vec<(i64, f64)> = vec_stmt
-                    .query_map(rusqlite::params![query_bytes, FIND_SIMILAR_MAX_K as i64], |row| {
-                        Ok((row.get(0)?, row.get(1)?))
-                    })?
+                    .query_map(
+                        rusqlite::params![query_bytes, FIND_SIMILAR_MAX_K as i64],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )?
                     .collect::<Result<Vec<_>, _>>()?;
 
                 let mut results = Vec::new();
-                let mut mem_stmt = conn.prepare(
-                    "SELECT id FROM memories WHERE rowid = ?1",
-                )?;
+                let mut mem_stmt = conn.prepare("SELECT id FROM memories WHERE rowid = ?1")?;
                 for (rowid, distance) in rows {
                     let score = (1.0 - distance) as f32;
                     if score >= threshold {
-                        let entry_id: EntryId = mem_stmt.query_row(
-                            rusqlite::params![rowid],
-                            |row| row.get(0),
-                        )?;
+                        let entry_id: EntryId =
+                            mem_stmt.query_row(rusqlite::params![rowid], |row| row.get(0))?;
                         results.push((entry_id, score));
                     }
                 }
@@ -149,11 +146,7 @@ impl MemoryStore for SqliteStore {
         Ok(results)
     }
 
-    async fn update_links(
-        &self,
-        id: EntryId,
-        links: Vec<Link>,
-    ) -> meridian_core::Result<()> {
+    async fn update_links(&self, id: EntryId, links: Vec<Link>) -> meridian_core::Result<()> {
         self.writer
             .execute(move |conn| {
                 let tx = conn.unchecked_transaction()?;
@@ -263,7 +256,9 @@ fn row_to_memory(row: &rusqlite::Row) -> Result<MemoryEntry, rusqlite::Error> {
         tags: serde_json::from_str(&tags_json).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
         })?,
-        lifecycle_state: lifecycle_str.parse::<LifecycleState>().unwrap_or(LifecycleState::Generated),
+        lifecycle_state: lifecycle_str
+            .parse::<LifecycleState>()
+            .unwrap_or(LifecycleState::Generated),
         importance: importance as f32,
         access_count: access_count as u32,
         created_at: parse_rfc3339(&created_str)?,

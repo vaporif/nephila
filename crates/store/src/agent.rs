@@ -1,5 +1,5 @@
-use crate::util::parse_rfc3339;
 use crate::SqliteStore;
+use crate::util::parse_rfc3339;
 use chrono::Utc;
 use meridian_core::agent::{Agent, AgentState};
 use meridian_core::directive::Directive;
@@ -210,7 +210,9 @@ fn row_to_agent(row: &rusqlite::Row) -> Result<Agent, rusqlite::Error> {
 
     Ok(Agent {
         id: row.get(0)?,
-        state: state_str.parse::<AgentState>().unwrap_or(AgentState::Failed),
+        state: state_str
+            .parse::<AgentState>()
+            .unwrap_or(AgentState::Failed),
         directive: directive_str
             .parse::<Directive>()
             .unwrap_or(Directive::Continue),

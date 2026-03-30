@@ -30,13 +30,7 @@ async fn test_full_context_reset_loop() {
     .unwrap();
 
     let agent_id = AgentId::new();
-    let agent = Agent::new(
-        agent_id,
-        obj_id,
-        PathBuf::from("/tmp/agent-1"),
-        None,
-        None,
-    );
+    let agent = Agent::new(agent_id, obj_id, PathBuf::from("/tmp/agent-1"), None, None);
     AgentStore::register(&store, agent).await.unwrap();
     ObjectiveStore::assign_agent(&store, obj_id, agent_id)
         .await
@@ -90,9 +84,17 @@ async fn test_full_context_reset_loop() {
     let l2_embeddings: Vec<Embedding> = vec![make_embedding(0.2), make_embedding(0.3)];
 
     let version = CheckpointVersion(1);
-    CheckpointStore::save(&store, agent_id, version, &l0, &l1, &l2_chunks, &l2_embeddings)
-        .await
-        .unwrap();
+    CheckpointStore::save(
+        &store,
+        agent_id,
+        version,
+        &l0,
+        &l1,
+        &l2_chunks,
+        &l2_embeddings,
+    )
+    .await
+    .unwrap();
     AgentStore::set_checkpoint_version(&store, agent_id, version)
         .await
         .unwrap();
@@ -141,13 +143,17 @@ async fn test_full_context_reset_loop() {
     assert!(checkpoint.l1.contains("JWT validation"));
 
     let query_embedding = make_embedding(0.2);
-    let results = MemoryStore::search(&store, &query_embedding, 5).await.unwrap();
+    let results = MemoryStore::search(&store, &query_embedding, 5)
+        .await
+        .unwrap();
     assert!(!results.is_empty(), "memory search should return results");
 
     AgentStore::update_state(&store, new_agent_id, AgentState::Active)
         .await
         .unwrap();
-    let directive = AgentStore::get_directive(&store, new_agent_id).await.unwrap();
+    let directive = AgentStore::get_directive(&store, new_agent_id)
+        .await
+        .unwrap();
     assert_eq!(directive, Directive::Continue);
 
     let tree = ObjectiveStore::get_tree(&store, obj_id).await.unwrap();
@@ -172,13 +178,7 @@ async fn test_multiple_checkpoint_versions() {
     let agent_id = AgentId::new();
     AgentStore::register(
         &store,
-        Agent::new(
-            agent_id,
-            obj_id,
-            PathBuf::from("/tmp/test"),
-            None,
-            None,
-        ),
+        Agent::new(agent_id, obj_id, PathBuf::from("/tmp/test"), None, None),
     )
     .await
     .unwrap();
@@ -214,7 +214,9 @@ async fn test_multiple_checkpoint_versions() {
         .unwrap();
     assert!(v1.l1.contains("v1"));
 
-    let versions = CheckpointStore::list_versions(&store, agent_id).await.unwrap();
+    let versions = CheckpointStore::list_versions(&store, agent_id)
+        .await
+        .unwrap();
     assert_eq!(versions, vec![CheckpointVersion(2), CheckpointVersion(1)]);
 }
 
@@ -236,20 +238,39 @@ async fn test_hitl_tracking() {
     let agent_id = AgentId::new();
     AgentStore::register(
         &store,
-        Agent::new(
-            agent_id,
-            obj_id,
-            PathBuf::from("/tmp/test"),
-            None,
-            None,
-        ),
+        Agent::new(agent_id, obj_id, PathBuf::from("/tmp/test"), None, None),
     )
     .await
     .unwrap();
 
-    assert_eq!(HitlStore::record_ask(&store, agent_id, 12345).await.unwrap(), 1);
-    assert_eq!(HitlStore::record_ask(&store, agent_id, 12345).await.unwrap(), 2);
-    assert_eq!(HitlStore::record_ask(&store, agent_id, 99999).await.unwrap(), 1);
-    assert_eq!(HitlStore::get_ask_count(&store, agent_id, 12345).await.unwrap(), 2);
-    assert_eq!(HitlStore::get_ask_count(&store, agent_id, 11111).await.unwrap(), 0);
+    assert_eq!(
+        HitlStore::record_ask(&store, agent_id, 12345)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        HitlStore::record_ask(&store, agent_id, 12345)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        HitlStore::record_ask(&store, agent_id, 99999)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        HitlStore::get_ask_count(&store, agent_id, 12345)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        HitlStore::get_ask_count(&store, agent_id, 11111)
+            .await
+            .unwrap(),
+        0
+    );
 }

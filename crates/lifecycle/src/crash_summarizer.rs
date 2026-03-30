@@ -63,7 +63,10 @@ impl Summarizer for CrashSummarizer {
                 EventType::ToolResult => "result",
                 _ => "event",
             };
-            lines.push(format!("- [{event_label}] {tool_name} at {}", event.timestamp));
+            lines.push(format!(
+                "- [{event_label}] {tool_name} at {}",
+                event.timestamp
+            ));
         }
 
         Ok(lines.join("\n"))

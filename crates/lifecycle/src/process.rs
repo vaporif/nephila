@@ -13,11 +13,7 @@ pub struct SpawnConfig {
 
 /// Runs the initial prompt as a one-shot, creating a Claude session that can be resumed.
 /// Returns the session_id on success.
-pub async fn spawn_initial(
-    config: &SpawnConfig,
-    prompt: &str,
-    session_id: &str,
-) -> Result<()> {
+pub async fn spawn_initial(config: &SpawnConfig, prompt: &str, session_id: &str) -> Result<()> {
     let mcp_config = serde_json::json!({
         "mcpServers": {
             "meridian": {

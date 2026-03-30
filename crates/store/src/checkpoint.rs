@@ -1,5 +1,5 @@
-use crate::util::{f32_slice_to_bytes, parse_rfc3339};
 use crate::SqliteStore;
+use crate::util::{f32_slice_to_bytes, parse_rfc3339};
 use chrono::Utc;
 use meridian_core::checkpoint::{Checkpoint, L0State, L2Chunk};
 use meridian_core::id::{AgentId, CheckpointVersion};
@@ -22,8 +22,8 @@ impl CheckpointStore for SqliteStore {
             .iter()
             .zip(l2_embeddings.iter())
             .map(|(chunk, emb)| {
-                let content = serde_json::to_string(chunk)
-                    .map_err(meridian_core::MeridianError::from)?;
+                let content =
+                    serde_json::to_string(chunk).map_err(meridian_core::MeridianError::from)?;
                 let bytes = f32_slice_to_bytes(emb);
                 Ok((content, bytes))
             })
@@ -79,10 +79,7 @@ impl CheckpointStore for SqliteStore {
         Ok(())
     }
 
-    async fn get_latest(
-        &self,
-        agent_id: AgentId,
-    ) -> meridian_core::Result<Option<Checkpoint>> {
+    async fn get_latest(&self, agent_id: AgentId) -> meridian_core::Result<Option<Checkpoint>> {
         let checkpoint = self
             .writer
             .execute(move |conn| {
@@ -146,10 +143,9 @@ fn load_checkpoint(
         let mut stmt = conn.prepare(
             "SELECT content, created_at FROM checkpoints WHERE agent_id = ?1 AND version = ?2 AND layer = 'l0'",
         )?;
-        match stmt.query_row(
-            rusqlite::params![agent_id, version],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        ) {
+        match stmt.query_row(rusqlite::params![agent_id, version], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        }) {
             Ok(r) => Some(r),
             Err(rusqlite::Error::QueryReturnedNoRows) => None,
             Err(e) => return Err(e),

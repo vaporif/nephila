@@ -98,8 +98,7 @@ impl App {
                 match self.event_rx.try_recv() {
                     Ok(event) => self.handle_bus_event(event),
                     Err(broadcast::error::TryRecvError::Lagged(n)) => {
-                        self.event_log
-                            .push(format!("Warning: missed {n} events"));
+                        self.event_log.push(format!("Warning: missed {n} events"));
                     }
                     Err(_) => break,
                 }
@@ -109,7 +108,8 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
-        let layout = AppLayout::compute_with_focus(frame.area(), self.focus == FocusPanel::EventLog);
+        let layout =
+            AppLayout::compute_with_focus(frame.area(), self.focus == FocusPanel::EventLog);
 
         frame.render_stateful_widget(
             ObjectiveTreeWidget {
@@ -178,7 +178,9 @@ impl App {
         let visible_height = inner.height as usize;
         let total = all_lines.len();
         let start = if self.debug_scroll > 0 {
-            total.saturating_sub(visible_height).saturating_sub(self.debug_scroll)
+            total
+                .saturating_sub(visible_height)
+                .saturating_sub(self.debug_scroll)
         } else {
             total.saturating_sub(visible_height)
         };
@@ -353,10 +355,8 @@ impl App {
                         })
                         .await
                 {
-                    self.event_log.push(format!(
-                        "[{agent_id}] Rollback to {} requested",
-                        cs.version
-                    ));
+                    self.event_log
+                        .push(format!("[{agent_id}] Rollback to {} requested", cs.version));
                 }
             }
             Modal::FilePicker { files, selected } => {
@@ -380,19 +380,17 @@ impl App {
                     }
                 }
             }
-            Modal::ConfirmDelete { path, title } => {
-                match std::fs::remove_file(&path) {
-                    Ok(()) => {
-                        self.event_log.push(format!("Deleted \"{title}\""));
-                        self.goals = goals::scan_goals_dir(&self.goals_dir).unwrap_or_default();
-                        goals::reconcile_with_mapping(&self.goals_dir, &mut self.goals);
-                        self.objective_tree.load_goals(&self.goals);
-                    }
-                    Err(e) => {
-                        self.event_log.push(format!("Failed to delete: {e}"));
-                    }
+            Modal::ConfirmDelete { path, title } => match std::fs::remove_file(&path) {
+                Ok(()) => {
+                    self.event_log.push(format!("Deleted \"{title}\""));
+                    self.goals = goals::scan_goals_dir(&self.goals_dir).unwrap_or_default();
+                    goals::reconcile_with_mapping(&self.goals_dir, &mut self.goals);
+                    self.objective_tree.load_goals(&self.goals);
                 }
-            }
+                Err(e) => {
+                    self.event_log.push(format!("Failed to delete: {e}"));
+                }
+            },
             Modal::View { .. } | Modal::Help | Modal::None => {}
         }
     }
@@ -410,11 +408,8 @@ impl App {
                     tokio::task::spawn_blocking(move || goals::open_in_editor(&path)).await;
 
                 crossterm::terminal::enable_raw_mode().ok();
-                crossterm::execute!(
-                    std::io::stdout(),
-                    crossterm::terminal::EnterAlternateScreen
-                )
-                .ok();
+                crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen)
+                    .ok();
                 self.needs_clear = true;
 
                 match edit_result {
@@ -489,24 +484,18 @@ impl App {
 
     async fn handle_edit_objective(&mut self) {
         let Some(path) = self.selected_goal_file() else {
-            self.event_log.push("Select a root objective to edit".into());
+            self.event_log
+                .push("Select a root objective to edit".into());
             return;
         };
 
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
 
         let _ = tokio::task::spawn_blocking(move || goals::open_in_editor(&path)).await;
 
         crossterm::terminal::enable_raw_mode().ok();
-        crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::EnterAlternateScreen
-        )
-        .ok();
+        crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen).ok();
         self.needs_clear = true;
 
         self.goals = goals::scan_goals_dir(&self.goals_dir).unwrap_or_default();
@@ -599,8 +588,7 @@ impl App {
                 }
             }
             None => {
-                let files: Vec<PathBuf> =
-                    self.goals.iter().map(|g| g.file_path.clone()).collect();
+                let files: Vec<PathBuf> = self.goals.iter().map(|g| g.file_path.clone()).collect();
                 if files.is_empty() {
                     self.event_log
                         .push("No goal files found — press N to create one".into());
@@ -754,7 +742,10 @@ impl App {
         true
     }
 
-    fn find_agent_mut(&mut self, agent_id: &AgentId) -> Option<&mut crate::panels::agent_tree::AgentTreeNode> {
+    fn find_agent_mut(
+        &mut self,
+        agent_id: &AgentId,
+    ) -> Option<&mut crate::panels::agent_tree::AgentTreeNode> {
         self.agent_tree
             .items
             .iter_mut()
@@ -762,12 +753,15 @@ impl App {
             .map(|i| &mut i.data)
     }
 
-    fn attach_agent_session(&mut self, agent_id: AgentId, session_id: String, directory: PathBuf, first_time: bool) {
+    fn attach_agent_session(
+        &mut self,
+        agent_id: AgentId,
+        session_id: String,
+        directory: PathBuf,
+        first_time: bool,
+    ) {
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen
-        );
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
 
         let mut cmd = std::process::Command::new("claude");
         if first_time {
@@ -784,11 +778,7 @@ impl App {
         let result = cmd.status();
 
         crossterm::terminal::enable_raw_mode().ok();
-        crossterm::execute!(
-            std::io::stdout(),
-            crossterm::terminal::EnterAlternateScreen
-        )
-        .ok();
+        crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen).ok();
         self.needs_clear = true;
 
         // Mark session as created after first attach
@@ -804,8 +794,7 @@ impl App {
                     .push(format!("Claude session exited: {status}"));
             }
             Err(e) => {
-                self.event_log
-                    .push(format!("Failed to attach: {e}"));
+                self.event_log.push(format!("Failed to attach: {e}"));
             }
         }
     }
@@ -853,8 +842,9 @@ impl App {
                         .find(|g| g.agent_id == Some(*agent_id))
                         .map(|g| g.title.clone())
                         .unwrap_or_else(|| agent_id.to_string());
-                    self.agent_tree.items.push(
-                        crate::panels::agent_tree::FlatTreeItem {
+                    self.agent_tree
+                        .items
+                        .push(crate::panels::agent_tree::FlatTreeItem {
                             data: crate::panels::agent_tree::AgentTreeNode {
                                 id: *agent_id,
                                 state: *new_state,
@@ -870,8 +860,7 @@ impl App {
                             depth: 0,
                             is_expanded: true,
                             has_children: false,
-                        },
-                    );
+                        });
                 }
                 self.event_log
                     .push(format!("[{agent_id}] state -> {new_state}"));
@@ -901,10 +890,7 @@ impl App {
                     options.join(", ")
                 ));
             }
-            BusEvent::HitlResponded {
-                agent_id,
-                response,
-            } => {
+            BusEvent::HitlResponded { agent_id, response } => {
                 self.pending_hitl.remove(agent_id);
                 if let Some(agent) = self.find_agent_mut(agent_id) {
                     agent.hitl_pending = false;
@@ -912,10 +898,7 @@ impl App {
                 self.event_log
                     .push(format!("[{agent_id}] HITL response: {response}"));
             }
-            BusEvent::CheckpointList {
-                agent_id,
-                versions,
-            } => {
+            BusEvent::CheckpointList { agent_id, versions } => {
                 if self.pending_rollback_agent == Some(*agent_id) {
                     self.pending_rollback_agent = None;
                     if versions.is_empty() {

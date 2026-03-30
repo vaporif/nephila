@@ -1,5 +1,5 @@
-use crate::util::parse_rfc3339;
 use crate::SqliteStore;
+use crate::util::parse_rfc3339;
 use chrono::Utc;
 use meridian_core::id::{AgentId, ObjectiveId};
 use meridian_core::objective::{NewObjective, ObjectiveNode, ObjectiveStatus, ObjectiveTree};
@@ -53,10 +53,7 @@ impl ObjectiveStore for SqliteStore {
         Ok(())
     }
 
-    async fn get_node(
-        &self,
-        id: ObjectiveId,
-    ) -> meridian_core::Result<Option<ObjectiveNode>> {
+    async fn get_node(&self, id: ObjectiveId) -> meridian_core::Result<Option<ObjectiveNode>> {
         let node = self
             .writer
             .execute(move |conn| {
@@ -75,10 +72,7 @@ impl ObjectiveStore for SqliteStore {
         Ok(node)
     }
 
-    async fn get_tree(
-        &self,
-        root_id: ObjectiveId,
-    ) -> meridian_core::Result<ObjectiveTree> {
+    async fn get_tree(&self, root_id: ObjectiveId) -> meridian_core::Result<ObjectiveTree> {
         let tree = self
             .writer
             .execute(move |conn| {
@@ -105,7 +99,9 @@ impl ObjectiveStore for SqliteStore {
 
         match tree {
             Some(root) => Ok(ObjectiveTree { root }),
-            None => Err(crate::StoreError::NotFound("objective root not found".to_string()))?,
+            None => Err(crate::StoreError::NotFound(
+                "objective root not found".to_string(),
+            ))?,
         }
     }
 
@@ -119,11 +115,7 @@ impl ObjectiveStore for SqliteStore {
             .execute(move |conn| {
                 let rows = conn.execute(
                     "UPDATE objectives SET agent_id = ?1, updated_at = ?2 WHERE id = ?3",
-                    rusqlite::params![
-                        agent_id,
-                        now,
-                        objective_id
-                    ],
+                    rusqlite::params![agent_id, now, objective_id],
                 )?;
                 if rows == 0 {
                     return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -147,7 +139,9 @@ fn row_to_node(row: &rusqlite::Row) -> Result<ObjectiveNode, rusqlite::Error> {
         parent_id: row.get(1)?,
         agent_id: row.get(2)?,
         description,
-        status: status_str.parse::<ObjectiveStatus>().unwrap_or(ObjectiveStatus::Pending),
+        status: status_str
+            .parse::<ObjectiveStatus>()
+            .unwrap_or(ObjectiveStatus::Pending),
         children: Vec::new(),
         created_at: parse_rfc3339(&created_str)?,
         updated_at: parse_rfc3339(&updated_str)?,
@@ -278,9 +272,7 @@ mod tests {
     async fn update_status_nonexistent_errors() {
         let store = SqliteStore::open_in_memory(384).unwrap();
         let fake_id = meridian_core::ObjectiveId::new();
-        let result = store
-            .update_status(fake_id, ObjectiveStatus::Done)
-            .await;
+        let result = store.update_status(fake_id, ObjectiveStatus::Done).await;
         assert!(result.is_err());
     }
 
