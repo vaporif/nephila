@@ -1,21 +1,21 @@
-# Pre-built ONNX Runtime for use with the `ort` crate.
+# Pre-built ONNX Runtime 1.24.2 for use with the `ort` crate (v2.0.0-rc.11).
 {
   lib,
   stdenv,
   fetchurl,
   autoPatchelfHook,
 }: let
-  version = "1.20.0";
+  version = "1.24.2";
 
   platform =
     {
       x86_64-linux = {
         name = "linux-x64";
-        hash = "0c2rgf5sc6zzz8z90ris9ap4g6nw3nslacpnhcpbhr724a5x8w5a";
+        hash = "1ri5mpz7i8idqx575ggg0lh0x1ckcsa1fiv82wp68qsnp9s58wj3";
       };
       aarch64-darwin = {
         name = "osx-arm64";
-        hash = "1bnx406hnidw1njq73mhg4nvprgxbw9jzbz3g17sk8zhkzxamkrb";
+        hash = "1pmbb3wfrm61l1yqaw0jm1b826s6lz845vj7bcj8b8lf7r8gmx0a";
       };
     }
     .${
