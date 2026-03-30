@@ -28,7 +28,7 @@ impl FastEmbedder {
     }
 
     pub fn with_default() -> Result<Self> {
-        Self::new("Xenova/bge-small-en-v1.5")
+        Self::new("BGESmallENV15")
     }
 }
 

@@ -137,6 +137,7 @@
             toolchain
             pkgs.cargo-nextest
             pkgs.cargo-llvm-cov
+            pkgs.cargo-deny
             pkgs.taplo
             pkgs.typos
             pkgs.llvmPackages.clang
