@@ -57,7 +57,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Storage
-rusqlite = { version = "0.35", features = ["bundled", "vtab"] }
+rusqlite = { version = "0.39", features = ["bundled", "vtab"] }
 sqlite-vec = "0.1"
 
 # HTTP / MCP
