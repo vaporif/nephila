@@ -1,7 +1,7 @@
 [meridian]
 storage_backend = "sqlite"
 sqlite_path = "./meridian.db"
-embedding_model = "Xenova/bge-small-en-v1.5"
+embedding_model = "BGESmallENV15"
 claude_binary = "claude"
 
 [lifecycle]
