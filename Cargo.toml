@@ -31,6 +31,12 @@ cognitive_complexity = "allow"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+authors = ["Dmytro Onypko <vaporif@proton.me>"]
+description = "AI orchestration framework with RAG capabilities"
+repository = "https://github.com/vaporif/meridian"
+readme = "README.md"
+keywords = ["ai", "orchestration", "rag", "llm", "embeddings"]
+categories = ["development-tools"]
 
 [workspace.dependencies]
 # Internal
