@@ -29,6 +29,22 @@ pub enum AgentPhase {
     Draining,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SpawnOrigin {
+    User,
+    Agent(AgentId),
+}
+
+impl SpawnOrigin {
+    #[must_use]
+    pub fn spawned_by(&self) -> Option<AgentId> {
+        match self {
+            Self::User => None,
+            Self::Agent(id) => Some(*id),
+        }
+    }
+}
+
 impl AgentState {
     #[must_use]
     pub fn from_str_lossy(s: &str) -> Self {
@@ -54,7 +70,8 @@ pub struct Agent {
     pub directory: PathBuf,
     pub objective_id: ObjectiveId,
     pub checkpoint_version: Option<CheckpointVersion>,
-    pub spawned_by: Option<AgentId>,
+    pub origin: SpawnOrigin,
+    pub children: Vec<AgentId>,
     pub injected_message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -109,7 +126,7 @@ impl Agent {
         id: AgentId,
         objective_id: ObjectiveId,
         directory: PathBuf,
-        spawned_by: Option<AgentId>,
+        origin: SpawnOrigin,
         injected_message: Option<String>,
     ) -> Self {
         let now = Utc::now();
@@ -121,7 +138,8 @@ impl Agent {
             directory,
             objective_id,
             checkpoint_version: None,
-            spawned_by,
+            origin,
+            children: Vec::new(),
             injected_message,
             created_at: now,
             updated_at: now,
@@ -296,7 +314,7 @@ mod tests {
             AgentId::new(),
             ObjectiveId::new(),
             PathBuf::from("/tmp/test"),
-            None,
+            SpawnOrigin::User,
             None,
         )
     }
@@ -725,5 +743,36 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, TransitionError::TerminalState { .. }));
+    }
+
+    #[test]
+    fn agent_with_spawn_origin_user() {
+        let agent = test_agent();
+        assert!(matches!(agent.origin, SpawnOrigin::User));
+        assert!(agent.children.is_empty());
+    }
+
+    #[test]
+    fn agent_with_spawn_origin_agent() {
+        let parent_id = AgentId::new();
+        let agent = Agent::new(
+            AgentId::new(),
+            ObjectiveId::new(),
+            PathBuf::from("/tmp/test"),
+            SpawnOrigin::Agent(parent_id),
+            None,
+        );
+        assert!(matches!(agent.origin, SpawnOrigin::Agent(id) if id == parent_id));
+    }
+
+    #[test]
+    fn spawn_origin_spawned_by_returns_agent_id() {
+        let parent = AgentId::new();
+        assert_eq!(SpawnOrigin::Agent(parent).spawned_by(), Some(parent));
+    }
+
+    #[test]
+    fn spawn_origin_user_spawned_by_returns_none() {
+        assert_eq!(SpawnOrigin::User.spawned_by(), None);
     }
 }

@@ -6,6 +6,7 @@ members = [
     "crates/embedding",
     "crates/lifecycle",
     "crates/mcp",
+    "crates/connector",
     "crates/tui",
     "bin",
 ]
@@ -38,6 +39,7 @@ meridian-store = { path = "crates/store" }
 meridian-embedding = { path = "crates/embedding" }
 meridian-lifecycle = { path = "crates/lifecycle" }
 meridian-mcp = { path = "crates/mcp" }
+meridian-connector = { path = "crates/connector" }
 meridian-tui = { path = "crates/tui" }
 
 # Async

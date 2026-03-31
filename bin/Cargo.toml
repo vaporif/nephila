@@ -9,6 +9,7 @@ meridian-core = { workspace = true }
 meridian-store = { workspace = true }
 meridian-embedding = { workspace = true }
 meridian-lifecycle = { workspace = true }
+meridian-connector = { workspace = true }
 meridian-mcp = { workspace = true }
 meridian-tui = { workspace = true }
 tokio = { workspace = true }
