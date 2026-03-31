@@ -1,5 +1,5 @@
 [package]
-name = "meridian-core"
+name = "meridian-eventsourcing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,19 +10,9 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-[features]
-rusqlite = ["dep:rusqlite"]
-
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
-uuid = { workspace = true }
 chrono = { workspace = true }
-tokio = { workspace = true, features = ["sync"] }
-toml = { workspace = true }
-strum = { workspace = true }
-rusqlite = { workspace = true, optional = true }
-meridian-eventsourcing = { workspace = true }
-
-[dev-dependencies]
+uuid = { workspace = true }
+thiserror = { workspace = true }

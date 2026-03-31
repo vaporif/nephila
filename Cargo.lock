@@ -2133,6 +2133,7 @@ name = "meridian-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "meridian-eventsourcing",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2153,6 +2154,17 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "meridian-eventsourcing"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
 ]
 
 [[package]]
@@ -2191,6 +2203,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "meridian-core",
+ "meridian-eventsourcing",
  "rusqlite",
  "serde",
  "serde_json",

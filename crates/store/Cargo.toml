@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 meridian-core = { workspace = true, features = ["rusqlite"] }
+meridian-eventsourcing = { workspace = true }
 rusqlite = { workspace = true }
 sqlite-vec = { workspace = true }
 tokio = { workspace = true }

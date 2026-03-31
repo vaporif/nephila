@@ -1,10 +1,13 @@
 pub mod agent;
 pub mod checkpoint;
+pub mod domain_event;
 pub mod event;
 pub mod hitl;
 pub mod memory;
 pub mod objective;
 pub mod schema;
+pub mod search_provider;
+pub mod tracing_store;
 pub(crate) mod util;
 pub mod writer;
 

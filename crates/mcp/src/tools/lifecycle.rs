@@ -11,7 +11,7 @@ use meridian_core::directive::Directive;
 use meridian_core::embedding::EmbeddingProvider;
 use meridian_core::event::BusEvent;
 use meridian_core::store::{
-    AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
@@ -54,7 +54,7 @@ where
         + CheckpointStore
         + MemoryStore
         + ObjectiveStore
-        + EventStore
+        + McpEventLog
         + HitlStore
         + Send
         + Sync
@@ -146,7 +146,7 @@ where
         + CheckpointStore
         + MemoryStore
         + ObjectiveStore
-        + EventStore
+        + McpEventLog
         + HitlStore
         + Send
         + Sync
@@ -225,7 +225,7 @@ where
         + CheckpointStore
         + MemoryStore
         + ObjectiveStore
-        + EventStore
+        + McpEventLog
         + HitlStore
         + Send
         + Sync
