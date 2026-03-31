@@ -72,6 +72,58 @@ CREATE TABLE IF NOT EXISTS hitl_tracking (
     PRIMARY KEY (agent_id, question_hash)
 );
 
+CREATE TABLE IF NOT EXISTS domain_events (
+    id TEXT PRIMARY KEY,
+    aggregate_type TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    trace_id TEXT NOT NULL,
+    outcome TEXT,
+    timestamp TEXT NOT NULL,
+    context_snapshot TEXT,
+    metadata TEXT,
+    UNIQUE(aggregate_type, aggregate_id, sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_domain_events_aggregate ON domain_events(aggregate_type, aggregate_id, sequence);
+CREATE INDEX IF NOT EXISTS idx_domain_events_trace_id ON domain_events(trace_id);
+CREATE INDEX IF NOT EXISTS idx_domain_events_timestamp ON domain_events(timestamp);
+
+CREATE TABLE IF NOT EXISTS aggregate_snapshots (
+    aggregate_type TEXT NOT NULL,
+    aggregate_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    PRIMARY KEY (aggregate_type, aggregate_id, sequence)
+);
+
+CREATE TABLE IF NOT EXISTS spans (
+    span_id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    parent_span_id TEXT,
+    name TEXT NOT NULL,
+    level TEXT NOT NULL,
+    target TEXT NOT NULL,
+    start_time TEXT NOT NULL,
+    end_time TEXT,
+    duration_us INTEGER,
+    attributes TEXT,
+    events TEXT,
+    status TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_spans_trace_id ON spans(trace_id);
+CREATE INDEX IF NOT EXISTS idx_spans_parent ON spans(parent_span_id);
+CREATE INDEX IF NOT EXISTS idx_spans_start_time ON spans(start_time);
+
+CREATE TABLE IF NOT EXISTS search_entries (
+    id TEXT PRIMARY KEY,
+    metadata TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_checkpoints_agent_version ON checkpoints(agent_id, version DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id);
 CREATE INDEX IF NOT EXISTS idx_memories_lifecycle ON memories(lifecycle_state);
@@ -103,7 +155,8 @@ pub fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
 
 pub fn init_vec_tables(conn: &Connection, dimension: usize) -> Result<(), rusqlite::Error> {
     conn.execute_batch(&format!(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{dimension}]);"
+        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{dimension}]);
+         CREATE VIRTUAL TABLE IF NOT EXISTS vec_search_entries USING vec0(embedding float[{dimension}]);"
     ))?;
     Ok(())
 }
@@ -132,6 +185,10 @@ mod tests {
         assert!(tables.contains(&"memory_links".to_string()));
         assert!(tables.contains(&"events".to_string()));
         assert!(tables.contains(&"hitl_tracking".to_string()));
+        assert!(tables.contains(&"search_entries".to_string()));
+        assert!(tables.contains(&"domain_events".to_string()));
+        assert!(tables.contains(&"aggregate_snapshots".to_string()));
+        assert!(tables.contains(&"spans".to_string()));
     }
 
     #[test]

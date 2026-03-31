@@ -149,7 +149,7 @@ pub trait ObjectiveStore: Send + Sync {
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
-pub trait EventStore: Send + Sync {
+pub trait McpEventLog: Send + Sync {
     fn append(&self, event: McpEvent) -> impl std::future::Future<Output = Result<()>> + Send;
 
     fn get_events(

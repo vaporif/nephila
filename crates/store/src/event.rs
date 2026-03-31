@@ -3,9 +3,9 @@ use crate::util::parse_rfc3339;
 use chrono::{DateTime, Utc};
 use meridian_core::event::{EventType, McpEvent};
 use meridian_core::id::AgentId;
-use meridian_core::store::EventStore;
+use meridian_core::store::McpEventLog;
 
-impl EventStore for SqliteStore {
+impl McpEventLog for SqliteStore {
     async fn append(&self, event: McpEvent) -> meridian_core::Result<()> {
         let event_type_str =
             serde_json::to_string(&event.event_type).map_err(meridian_core::MeridianError::from)?;
@@ -124,7 +124,7 @@ mod tests {
     use chrono::Utc;
     use meridian_core::event::{EventType, McpEvent};
     use meridian_core::id::AgentId;
-    use meridian_core::store::EventStore;
+    use meridian_core::store::McpEventLog;
 
     fn make_event(agent_id: AgentId, event_type: EventType) -> McpEvent {
         McpEvent {

@@ -13,7 +13,7 @@ use meridian_core::event::BusEvent;
 use meridian_core::id::ObjectiveId;
 use meridian_core::objective::NewObjective;
 use meridian_core::store::{
-    AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
@@ -66,7 +66,7 @@ where
         + CheckpointStore
         + MemoryStore
         + ObjectiveStore
-        + EventStore
+        + McpEventLog
         + HitlStore
         + Send
         + Sync
@@ -203,7 +203,7 @@ where
         + CheckpointStore
         + MemoryStore
         + ObjectiveStore
-        + EventStore
+        + McpEventLog
         + HitlStore
         + Send
         + Sync
@@ -299,7 +299,7 @@ where
         + CheckpointStore
         + MemoryStore
         + ObjectiveStore
-        + EventStore
+        + McpEventLog
         + HitlStore
         + Send
         + Sync

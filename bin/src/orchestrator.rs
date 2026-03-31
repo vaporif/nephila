@@ -145,7 +145,7 @@ impl Orchestrator {
             Some(parent) => SpawnOrigin::Agent(parent),
             None => SpawnOrigin::User,
         };
-        let mut agent = Agent::new(AgentId::new(), objective_id, dir, origin, Some(content));
+        let agent = Agent::new(AgentId::new(), objective_id, dir, origin, Some(content));
         let agent_id = agent.id;
 
         self.store.register(agent.clone()).await?;
@@ -153,11 +153,13 @@ impl Orchestrator {
         let events = agent
             .handle(AgentCommand::Activate)
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+        let agent = events.iter().fold(agent, |a, e| a.apply_event(e));
 
         let session_id = uuid::Uuid::new_v4().to_string();
         let session_events = agent
             .handle(AgentCommand::SetSession { session_id })
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
+        let agent = session_events.iter().fold(agent, |a, e| a.apply_event(e));
 
         AgentStore::save(self.store.as_ref(), &agent).await?;
         self.publish(&events);
@@ -182,14 +184,16 @@ impl Orchestrator {
     async fn dispatch(&mut self, agent_id: AgentId, cmd: AgentCommand) -> color_eyre::Result<()> {
         let agent = self
             .agents
-            .get_mut(&agent_id)
+            .get(&agent_id)
             .ok_or_else(|| color_eyre::eyre::eyre!("agent not found: {agent_id}"))?;
 
         let events = agent
             .handle(cmd)
             .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        AgentStore::save(self.store.as_ref(), agent).await?;
+        let agent = events.iter().fold(agent.clone(), |a, e| a.apply_event(e));
+        AgentStore::save(self.store.as_ref(), &agent).await?;
         self.publish(&events);
+        self.agents.insert(agent_id, agent);
         Ok(())
     }
 
@@ -267,7 +271,14 @@ impl Orchestrator {
                         directory: directory.clone(),
                     });
                 }
-                AgentEvent::DirectiveChanged { .. } | AgentEvent::CheckpointVersionSet { .. } => {}
+                AgentEvent::DirectiveChanged { .. }
+                | AgentEvent::CheckpointVersionSet { .. }
+                | AgentEvent::AgentSpawned { .. }
+                | AgentEvent::AgentKilled { .. }
+                | AgentEvent::CheckpointCompleted { .. }
+                | AgentEvent::HitlRequested { .. }
+                | AgentEvent::HitlResolved { .. }
+                | AgentEvent::TokenThresholdReached { .. } => {}
             }
         }
     }
