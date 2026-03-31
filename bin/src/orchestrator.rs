@@ -258,7 +258,13 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_agent(id: AgentId, spawned_by: Option<AgentId>) -> Agent {
-        Agent::new(id, ObjectiveId::new(), PathBuf::from("/tmp"), spawned_by, None)
+        Agent::new(
+            id,
+            ObjectiveId::new(),
+            PathBuf::from("/tmp"),
+            spawned_by,
+            None,
+        )
     }
 
     fn test_orchestrator(agents: HashMap<AgentId, Agent>) -> Orchestrator {

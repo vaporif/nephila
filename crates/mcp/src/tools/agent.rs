@@ -53,7 +53,10 @@ impl ToolBase for SpawnAgentTool {
     }
 
     fn description() -> Option<Cow<'static, str>> {
-        Some("Request Meridian to spawn a child agent with a given objective and working directory.".into())
+        Some(
+            "Request Meridian to spawn a child agent with a given objective and working directory."
+                .into(),
+        )
     }
 }
 
@@ -80,9 +83,9 @@ where
             .parent_objective_id
             .as_deref()
             .map(|s| {
-                s.parse::<uuid::Uuid>()
-                    .map(ObjectiveId)
-                    .map_err(|e| ErrorData::invalid_params(format!("invalid parent_objective_id: {e}"), None))
+                s.parse::<uuid::Uuid>().map(ObjectiveId).map_err(|e| {
+                    ErrorData::invalid_params(format!("invalid parent_objective_id: {e}"), None)
+                })
             })
             .transpose()?;
 
@@ -110,19 +113,21 @@ where
                 spawned_by,
             })
             .await
-            .map_err(|e| ErrorData::internal_error(format!("failed to send spawn command: {e}"), None))?;
+            .map_err(|e| {
+                ErrorData::internal_error(format!("failed to send spawn command: {e}"), None)
+            })?;
 
         let timeout = Duration::from_secs(10);
         let result = tokio::time::timeout(timeout, async {
             loop {
                 match event_rx.recv().await {
                     Ok(BusEvent::AgentSessionReady { agent_id, .. }) => {
-                        if let Ok(Some(agent)) = AgentStore::get(service.store.as_ref(), agent_id).await {
-                            if agent.spawned_by == Some(spawned_by)
-                                && agent.objective_id == objective_id
-                            {
-                                return Some(agent_id);
-                            }
+                        if let Ok(Some(agent)) =
+                            AgentStore::get(service.store.as_ref(), agent_id).await
+                            && agent.spawned_by == Some(spawned_by)
+                            && agent.objective_id == objective_id
+                        {
+                            return Some(agent_id);
                         }
                     }
                     Err(_) => return None,
