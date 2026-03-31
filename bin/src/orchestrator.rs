@@ -2,9 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use meridian_core::agent::{Agent, AgentCommand, AgentEvent};
+use meridian_connector::{ClaudeCodeConnector, TaskConnectorKind};
+use meridian_core::agent::{Agent, AgentCommand, AgentEvent, SpawnOrigin};
 use meridian_core::checkpoint::CheckpointSummary;
 use meridian_core::command::OrchestratorCommand;
+use meridian_core::config::ConnectorConfig;
 use meridian_core::directive::Directive;
 use meridian_core::event::BusEvent;
 use meridian_core::id::{AgentId, ObjectiveId};
@@ -15,6 +17,8 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 
 pub struct Orchestrator {
     agents: HashMap<AgentId, Agent>,
+    connectors: HashMap<AgentId, TaskConnectorKind>,
+    connector_config: ConnectorConfig,
     store: Arc<SqliteStore>,
     event_tx: broadcast::Sender<BusEvent>,
     hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
@@ -27,11 +31,14 @@ impl Orchestrator {
         event_tx: broadcast::Sender<BusEvent>,
         hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
         max_agent_depth: u32,
+        connector_config: ConnectorConfig,
     ) -> color_eyre::Result<Self> {
         let agents_list = store.list().await?;
         let agents = agents_list.into_iter().map(|a| (a.id, a)).collect();
         Ok(Self {
             agents,
+            connectors: HashMap::new(),
+            connector_config,
             store,
             event_tx,
             hitl_requests,
@@ -45,7 +52,7 @@ impl Orchestrator {
         while let Some(id) = current {
             match self.agents.get(&id) {
                 Some(agent) => {
-                    current = agent.spawned_by;
+                    current = agent.origin.spawned_by();
                     depth += 1;
                 }
                 None => break,
@@ -134,7 +141,11 @@ impl Orchestrator {
         dir: PathBuf,
         spawned_by: Option<AgentId>,
     ) -> color_eyre::Result<AgentId> {
-        let mut agent = Agent::new(AgentId::new(), objective_id, dir, spawned_by, Some(content));
+        let origin = match spawned_by {
+            Some(parent) => SpawnOrigin::Agent(parent),
+            None => SpawnOrigin::User,
+        };
+        let mut agent = Agent::new(AgentId::new(), objective_id, dir, origin, Some(content));
         let agent_id = agent.id;
 
         self.store.register(agent.clone()).await?;
@@ -152,6 +163,18 @@ impl Orchestrator {
         self.publish(&events);
         self.publish(&session_events);
         self.agents.insert(agent_id, agent);
+
+        let connector = ClaudeCodeConnector::new(self.connector_config.claude_binary.clone());
+        self.connectors
+            .insert(agent_id, TaskConnectorKind::ClaudeCode(connector));
+
+        // Track child in parent's children list
+        if let Some(parent_id) = spawned_by
+            && let Some(parent) = self.agents.get_mut(&parent_id)
+        {
+            parent.children.push(agent_id);
+            AgentStore::save(self.store.as_ref(), parent).await?;
+        }
 
         Ok(agent_id)
     }
@@ -258,13 +281,12 @@ mod tests {
     use std::path::PathBuf;
 
     fn make_agent(id: AgentId, spawned_by: Option<AgentId>) -> Agent {
-        Agent::new(
-            id,
-            ObjectiveId::new(),
-            PathBuf::from("/tmp"),
-            spawned_by,
-            None,
-        )
+        use meridian_core::agent::SpawnOrigin;
+        let origin = match spawned_by {
+            Some(parent) => SpawnOrigin::Agent(parent),
+            None => SpawnOrigin::User,
+        };
+        Agent::new(id, ObjectiveId::new(), PathBuf::from("/tmp"), origin, None)
     }
 
     fn test_orchestrator(agents: HashMap<AgentId, Agent>) -> Orchestrator {
@@ -272,6 +294,8 @@ mod tests {
         let (event_tx, _) = broadcast::channel(16);
         Orchestrator {
             agents,
+            connectors: HashMap::new(),
+            connector_config: ConnectorConfig::default(),
             store,
             event_tx,
             hitl_requests: Arc::new(RwLock::new(HashMap::new())),

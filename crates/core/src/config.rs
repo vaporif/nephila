@@ -9,6 +9,8 @@ pub struct MeridianConfig {
     pub summarizer: SummarizerConfig,
     pub memory: MemoryConfig,
     pub tui: TuiConfig,
+    #[serde(default)]
+    pub connector: ConnectorConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,8 +21,6 @@ pub struct CoreConfig {
     pub sqlite_path: PathBuf,
     #[serde(default = "default_embedding_model")]
     pub embedding_model: String,
-    #[serde(default = "default_claude_binary")]
-    pub claude_binary: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -89,6 +89,28 @@ pub struct TuiConfig {
     pub hitl_timeout_secs: u64,
     #[serde(default = "default_max_hitl_rerequests")]
     pub max_hitl_rerequests: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectorConfig {
+    #[serde(default = "default_claude_binary")]
+    pub claude_binary: String,
+    pub anthropic_api_key_env: Option<String>,
+    pub openai_base_url: Option<String>,
+    pub openai_api_key_env: Option<String>,
+    pub default_model: Option<String>,
+}
+
+impl Default for ConnectorConfig {
+    fn default() -> Self {
+        Self {
+            claude_binary: default_claude_binary(),
+            anthropic_api_key_env: None,
+            openai_base_url: None,
+            openai_api_key_env: None,
+            default_model: None,
+        }
+    }
 }
 
 fn default_storage_backend() -> String {
@@ -172,8 +194,10 @@ fn default_max_hitl_rerequests() -> u32 {
 
 impl Default for MeridianConfig {
     fn default() -> Self {
-        toml::from_str("[meridian]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n")
-            .expect("default config must parse")
+        toml::from_str(
+            "[meridian]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n[connector]\n",
+        )
+        .expect("default config must parse")
     }
 }
 
@@ -209,7 +233,6 @@ sqlite_path = "./test.db"
 storage_backend = "sqlite"
 sqlite_path = "./meridian.db"
 embedding_model = "text-embedding-3-small"
-claude_binary = "claude"
 
 [lifecycle]
 context_threshold_pct = 80
@@ -237,10 +260,38 @@ link_similarity_threshold = 0.75
 refresh_rate_ms = 100
 max_event_log_lines = 1000
 max_hitl_rerequests = 3
+
+[connector]
+claude_binary = "claude"
 "#;
         let config: MeridianConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.meridian.storage_backend, "sqlite");
         assert_eq!(config.supervision.max_restarts, 5);
         assert_eq!(config.supervision.max_agent_depth, 3);
+        assert_eq!(config.connector.claude_binary, "claude");
+    }
+
+    #[test]
+    fn test_deserialize_config_with_connector() {
+        let toml_str = r#"
+[meridian]
+[lifecycle]
+[supervision]
+[summarizer]
+[memory]
+[tui]
+[connector]
+claude_binary = "/usr/local/bin/claude"
+anthropic_api_key_env = "MY_KEY"
+"#;
+        let config: MeridianConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.connector.claude_binary, "/usr/local/bin/claude");
+        assert_eq!(config.connector.anthropic_api_key_env.unwrap(), "MY_KEY");
+    }
+
+    #[test]
+    fn test_default_config_has_connector() {
+        let config = MeridianConfig::default();
+        assert_eq!(config.connector.claude_binary, "claude");
     }
 }

@@ -26,6 +26,9 @@ pub enum MeridianError {
     #[error("process error: {0}")]
     Process(String),
 
+    #[error("connector error: {0}")]
+    Connector(String),
+
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 

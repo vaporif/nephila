@@ -139,7 +139,7 @@ pub fn build_agent_trees(
         };
         nodes.insert(rec.id, tree_node);
 
-        if let Some(parent) = rec.spawned_by {
+        if let Some(parent) = rec.origin.spawned_by() {
             child_map.entry(parent).or_default().push(rec.id);
         } else {
             roots.push(rec.id);
@@ -273,7 +273,7 @@ mod tests {
             parent_id,
             ObjectiveId::new(),
             PathBuf::from("/tmp"),
-            None,
+            meridian_core::agent::SpawnOrigin::User,
             None,
         );
         parent.state = AgentState::Active;
@@ -282,7 +282,7 @@ mod tests {
             child_id,
             ObjectiveId::new(),
             PathBuf::from("/tmp"),
-            Some(parent_id),
+            meridian_core::agent::SpawnOrigin::Agent(parent_id),
             None,
         );
 

@@ -95,12 +95,14 @@ async fn main() -> Result<()> {
     let orch_event_tx = event_tx.clone();
     let orch_hitl = hitl_requests.clone();
     let max_agent_depth = config.supervision.max_agent_depth;
+    let connector_config = config.connector.clone();
     let cmd_handle = tokio::spawn(async move {
         match orchestrator::Orchestrator::load(
             orch_store,
             orch_event_tx,
             orch_hitl,
             max_agent_depth,
+            connector_config,
         )
         .await
         {
@@ -111,7 +113,13 @@ async fn main() -> Result<()> {
 
     let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let mut terminal = ratatui::init();
-    let mut app = meridian_tui::App::new(event_rx, cmd_tx, working_dir, tui_log);
+    let mut app = meridian_tui::App::new(
+        event_rx,
+        cmd_tx,
+        working_dir,
+        tui_log,
+        config.connector.claude_binary.clone(),
+    );
     let tui_result = app.run(&mut terminal).await;
     ratatui::restore();
 

@@ -2100,6 +2100,7 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
+ "meridian-connector",
  "meridian-core",
  "meridian-embedding",
  "meridian-lifecycle",
@@ -2113,6 +2114,18 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "meridian-connector"
+version = "0.1.0"
+dependencies = [
+ "meridian-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

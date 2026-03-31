@@ -124,7 +124,7 @@ where
                     Ok(BusEvent::AgentSessionReady { agent_id, .. }) => {
                         if let Ok(Some(agent)) =
                             AgentStore::get(service.store.as_ref(), agent_id).await
-                            && agent.spawned_by == Some(spawned_by)
+                            && agent.origin.spawned_by() == Some(spawned_by)
                             && agent.objective_id == objective_id
                         {
                             return Some(agent_id);
@@ -228,7 +228,7 @@ where
                 directive: Some(a.directive.to_string()),
                 objective_id: Some(a.objective_id.0.to_string()),
                 checkpoint_version: a.checkpoint_version.map(|v| v.0),
-                spawned_by: a.spawned_by.map(|id| id.0.to_string()),
+                spawned_by: a.origin.spawned_by().map(|id| id.0.to_string()),
                 created_at: Some(a.created_at.to_rfc3339()),
                 updated_at: Some(a.updated_at.to_rfc3339()),
             }),

@@ -21,7 +21,7 @@ impl AgentStore for SqliteStore {
                         agent.directory.to_string_lossy().to_string(),
                         agent.objective_id,
                         agent.checkpoint_version,
-                        agent.spawned_by,
+                        agent.origin.spawned_by(),
                         agent.injected_message,
                         agent.session_id,
                         agent.created_at.to_rfc3339(),
@@ -220,7 +220,14 @@ fn row_to_agent(row: &rusqlite::Row) -> Result<Agent, rusqlite::Error> {
         directory: PathBuf::from(dir_str),
         objective_id: row.get(3)?,
         checkpoint_version: row.get(4)?,
-        spawned_by: row.get(5)?,
+        origin: {
+            let spawned_by: Option<AgentId> = row.get(5)?;
+            match spawned_by {
+                Some(id) => meridian_core::agent::SpawnOrigin::Agent(id),
+                None => meridian_core::agent::SpawnOrigin::User,
+            }
+        },
+        children: Vec::new(),
         injected_message,
         created_at: parse_rfc3339(&created_str)?,
         updated_at: parse_rfc3339(&updated_str)?,
@@ -238,7 +245,7 @@ mod tests {
             AgentId::new(),
             meridian_core::ObjectiveId::new(),
             PathBuf::from("/tmp/test"),
-            None,
+            meridian_core::agent::SpawnOrigin::User,
             None,
         )
     }

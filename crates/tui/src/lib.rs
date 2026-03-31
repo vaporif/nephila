@@ -30,6 +30,7 @@ use crate::tui_tracing::TuiLogBuffer;
 pub struct App {
     event_rx: broadcast::Receiver<BusEvent>,
     cmd_tx: mpsc::Sender<TuiCommand>,
+    claude_binary: String,
     focus: FocusPanel,
     running: bool,
     modal: Modal,
@@ -52,6 +53,7 @@ impl App {
         cmd_tx: mpsc::Sender<TuiCommand>,
         working_dir: PathBuf,
         debug_log: TuiLogBuffer,
+        claude_binary: String,
     ) -> Self {
         let goals_dir = working_dir.join("goals");
         let mut goals = goals::scan_goals_dir(&goals_dir).unwrap_or_default();
@@ -63,6 +65,7 @@ impl App {
         Self {
             event_rx,
             cmd_tx,
+            claude_binary,
             focus: FocusPanel::default(),
             running: true,
             modal: Modal::default(),
@@ -763,7 +766,7 @@ impl App {
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
 
-        let mut cmd = std::process::Command::new("claude");
+        let mut cmd = std::process::Command::new(&self.claude_binary);
         if first_time {
             cmd.arg("--session-id").arg(&session_id);
         } else {

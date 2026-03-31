@@ -2,6 +2,8 @@
 storage_backend = "sqlite"
 sqlite_path = "./meridian.db"
 embedding_model = "BGESmallENV15"
+
+[connector]
 claude_binary = "claude"
 
 [lifecycle]

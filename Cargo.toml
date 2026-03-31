@@ -6,6 +6,7 @@ members = [
     "crates/embedding",
     "crates/lifecycle",
     "crates/mcp",
+    "crates/connector",
     "crates/tui",
     "bin",
 ]
@@ -30,6 +31,12 @@ cognitive_complexity = "allow"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+authors = ["Dmytro Onypko <vaporif@proton.me>"]
+description = "AI orchestration framework with RAG capabilities"
+repository = "https://github.com/vaporif/meridian"
+readme = "README.md"
+keywords = ["ai", "orchestration", "rag", "llm", "embeddings"]
+categories = ["development-tools"]
 
 [workspace.dependencies]
 # Internal
@@ -38,6 +45,7 @@ meridian-store = { path = "crates/store" }
 meridian-embedding = { path = "crates/embedding" }
 meridian-lifecycle = { path = "crates/lifecycle" }
 meridian-mcp = { path = "crates/mcp" }
+meridian-connector = { path = "crates/connector" }
 meridian-tui = { path = "crates/tui" }
 
 # Async

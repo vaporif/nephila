@@ -1,0 +1,21 @@
+pub mod anthropic_api;
+pub mod claude_code;
+pub mod config;
+pub mod dispatch;
+pub mod error;
+pub mod hitl;
+pub mod message;
+pub mod openai_compatible;
+pub mod task;
+pub mod types;
+
+pub use anthropic_api::AnthropicApiConnector;
+pub use claude_code::ClaudeCodeConnector;
+pub use config::{RequestConfig, SpawnConfig};
+pub use dispatch::{MessageConnectorKind, TaskConnectorKind};
+pub use error::ConnectorError;
+pub use hitl::{HitlHandler, HitlRequest as ConnectorHitlRequest, HitlResponse};
+pub use message::MessageConnector;
+pub use openai_compatible::OpenAiCompatibleConnector;
+pub use task::{TaskConnector, TaskHandle, TaskResult, TaskStatus};
+pub use types::{ContentBlock, Message, Response, Role, StopReason, ToolDefinition, Usage};

@@ -3,12 +3,19 @@ name = "meridian"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 meridian-core = { workspace = true }
 meridian-store = { workspace = true }
 meridian-embedding = { workspace = true }
 meridian-lifecycle = { workspace = true }
+meridian-connector = { workspace = true }
 meridian-mcp = { workspace = true }
 meridian-tui = { workspace = true }
 tokio = { workspace = true }

@@ -1,4 +1,4 @@
-use meridian_core::agent::{Agent, AgentState};
+use meridian_core::agent::{Agent, AgentState, SpawnOrigin};
 use meridian_core::checkpoint::{L0State, L2Chunk, ObjectiveSnapshot};
 use meridian_core::directive::Directive;
 use meridian_core::id::*;
@@ -30,7 +30,13 @@ async fn test_full_context_reset_loop() {
     .unwrap();
 
     let agent_id = AgentId::new();
-    let agent = Agent::new(agent_id, obj_id, PathBuf::from("/tmp/agent-1"), None, None);
+    let agent = Agent::new(
+        agent_id,
+        obj_id,
+        PathBuf::from("/tmp/agent-1"),
+        SpawnOrigin::User,
+        None,
+    );
     AgentStore::register(&store, agent).await.unwrap();
     ObjectiveStore::assign_agent(&store, obj_id, agent_id)
         .await
@@ -126,7 +132,7 @@ async fn test_full_context_reset_loop() {
         new_agent_id,
         obj_id,
         PathBuf::from("/tmp/agent-2"),
-        None,
+        SpawnOrigin::User,
         None,
     );
     new_agent.state = AgentState::Restoring;
@@ -178,7 +184,13 @@ async fn test_multiple_checkpoint_versions() {
     let agent_id = AgentId::new();
     AgentStore::register(
         &store,
-        Agent::new(agent_id, obj_id, PathBuf::from("/tmp/test"), None, None),
+        Agent::new(
+            agent_id,
+            obj_id,
+            PathBuf::from("/tmp/test"),
+            SpawnOrigin::User,
+            None,
+        ),
     )
     .await
     .unwrap();
@@ -238,7 +250,13 @@ async fn test_hitl_tracking() {
     let agent_id = AgentId::new();
     AgentStore::register(
         &store,
-        Agent::new(agent_id, obj_id, PathBuf::from("/tmp/test"), None, None),
+        Agent::new(
+            agent_id,
+            obj_id,
+            PathBuf::from("/tmp/test"),
+            SpawnOrigin::User,
+            None,
+        ),
     )
     .await
     .unwrap();
