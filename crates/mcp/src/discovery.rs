@@ -12,6 +12,9 @@ pub enum ToolName {
     RequestHumanInput,
     SerializeAndPersist,
     RequestContextReset,
+    SpawnAgent,
+    GetAgentStatus,
+    GetEventLog,
 }
 
 impl ToolName {
@@ -27,6 +30,9 @@ impl ToolName {
             Self::RequestHumanInput => "request_human_input",
             Self::SerializeAndPersist => "serialize_and_persist",
             Self::RequestContextReset => "request_context_reset",
+            Self::SpawnAgent => "spawn_agent",
+            Self::GetAgentStatus => "get_agent_status",
+            Self::GetEventLog => "get_event_log",
         }
     }
 }
@@ -47,6 +53,9 @@ pub fn phase_tools(phase: AgentPhase) -> Vec<ToolName> {
             ToolName::UpdateObjective,
             ToolName::RequestHumanInput,
             ToolName::GetDirective,
+            ToolName::SpawnAgent,
+            ToolName::GetAgentStatus,
+            ToolName::GetEventLog,
         ],
         AgentPhase::Draining => vec![
             ToolName::SerializeAndPersist,
@@ -86,7 +95,10 @@ mod tests {
         assert!(tools.contains(&ToolName::UpdateObjective));
         assert!(tools.contains(&ToolName::RequestHumanInput));
         assert!(tools.contains(&ToolName::GetDirective));
-        assert_eq!(tools.len(), 7);
+        assert!(tools.contains(&ToolName::SpawnAgent));
+        assert!(tools.contains(&ToolName::GetAgentStatus));
+        assert!(tools.contains(&ToolName::GetEventLog));
+        assert_eq!(tools.len(), 10);
 
         // excluded from this phase
         assert!(!tools.contains(&ToolName::GetSessionCheckpoint));
@@ -137,10 +149,16 @@ mod tests {
             ToolName::RequestHumanInput,
             ToolName::SerializeAndPersist,
             ToolName::RequestContextReset,
+            ToolName::SpawnAgent,
+            ToolName::GetAgentStatus,
+            ToolName::GetEventLog,
         ];
         for name in &all {
             let s = name.as_str();
             assert!(!s.is_empty(), "{name:?} must have a non-empty wire name");
         }
+        assert_eq!(ToolName::SpawnAgent.as_str(), "spawn_agent");
+        assert_eq!(ToolName::GetAgentStatus.as_str(), "get_agent_status");
+        assert_eq!(ToolName::GetEventLog.as_str(), "get_event_log");
     }
 }

@@ -18,6 +18,7 @@ pub struct Orchestrator {
     store: Arc<SqliteStore>,
     event_tx: broadcast::Sender<BusEvent>,
     hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
+    max_agent_depth: u32,
 }
 
 impl Orchestrator {
@@ -25,6 +26,7 @@ impl Orchestrator {
         store: Arc<SqliteStore>,
         event_tx: broadcast::Sender<BusEvent>,
         hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
+        max_agent_depth: u32,
     ) -> color_eyre::Result<Self> {
         let agents_list = store.list().await?;
         let agents = agents_list.into_iter().map(|a| (a.id, a)).collect();
@@ -33,7 +35,23 @@ impl Orchestrator {
             store,
             event_tx,
             hitl_requests,
+            max_agent_depth,
         })
+    }
+
+    fn agent_depth(&self, agent_id: AgentId) -> u32 {
+        let mut depth = 0;
+        let mut current = Some(agent_id);
+        while let Some(id) = current {
+            match self.agents.get(&id) {
+                Some(agent) => {
+                    current = agent.spawned_by;
+                    depth += 1;
+                }
+                None => break,
+            }
+        }
+        depth
     }
 
     pub async fn run(&mut self, mut rx: mpsc::Receiver<OrchestratorCommand>) {
@@ -49,6 +67,22 @@ impl Orchestrator {
                     .spawn(objective_id, content, dir, None)
                     .await
                     .map(|_| ()),
+                OrchestratorCommand::SpawnAgent {
+                    objective_id,
+                    content,
+                    dir,
+                    spawned_by,
+                } => {
+                    let depth = self.agent_depth(spawned_by);
+                    if depth >= self.max_agent_depth {
+                        tracing::warn!(%spawned_by, depth, max = self.max_agent_depth, "spawn rejected: max agent depth exceeded");
+                        Ok(())
+                    } else {
+                        self.spawn(objective_id, content, dir, Some(spawned_by))
+                            .await
+                            .map(|_| ())
+                    }
+                }
                 OrchestratorCommand::Kill { agent_id } => {
                     self.dispatch(agent_id, AgentCommand::Kill).await
                 }
@@ -213,5 +247,71 @@ impl Orchestrator {
                 AgentEvent::DirectiveChanged { .. } | AgentEvent::CheckpointVersionSet { .. } => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meridian_core::agent::Agent;
+    use meridian_core::id::{AgentId, ObjectiveId};
+    use std::path::PathBuf;
+
+    fn make_agent(id: AgentId, spawned_by: Option<AgentId>) -> Agent {
+        Agent::new(id, ObjectiveId::new(), PathBuf::from("/tmp"), spawned_by, None)
+    }
+
+    fn test_orchestrator(agents: HashMap<AgentId, Agent>) -> Orchestrator {
+        let store = Arc::new(SqliteStore::open_in_memory(384).unwrap());
+        let (event_tx, _) = broadcast::channel(16);
+        Orchestrator {
+            agents,
+            store,
+            event_tx,
+            hitl_requests: Arc::new(RwLock::new(HashMap::new())),
+            max_agent_depth: 3,
+        }
+    }
+
+    #[test]
+    fn depth_of_root_agent_is_one() {
+        let id = AgentId::new();
+        let mut agents = HashMap::new();
+        agents.insert(id, make_agent(id, None));
+
+        let orch = test_orchestrator(agents);
+        assert_eq!(orch.agent_depth(id), 1);
+    }
+
+    #[test]
+    fn depth_of_child_is_two() {
+        let parent = AgentId::new();
+        let child = AgentId::new();
+        let mut agents = HashMap::new();
+        agents.insert(parent, make_agent(parent, None));
+        agents.insert(child, make_agent(child, Some(parent)));
+
+        let orch = test_orchestrator(agents);
+        assert_eq!(orch.agent_depth(child), 2);
+    }
+
+    #[test]
+    fn depth_chain_of_three() {
+        let a = AgentId::new();
+        let b = AgentId::new();
+        let c = AgentId::new();
+        let mut agents = HashMap::new();
+        agents.insert(a, make_agent(a, None));
+        agents.insert(b, make_agent(b, Some(a)));
+        agents.insert(c, make_agent(c, Some(b)));
+
+        let orch = test_orchestrator(agents);
+        assert_eq!(orch.agent_depth(c), 3);
+    }
+
+    #[test]
+    fn depth_of_unknown_agent_is_zero() {
+        let orch = test_orchestrator(HashMap::new());
+        assert_eq!(orch.agent_depth(AgentId::new()), 0);
     }
 }

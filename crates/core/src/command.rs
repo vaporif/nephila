@@ -9,6 +9,12 @@ pub enum OrchestratorCommand {
         content: String,
         dir: PathBuf,
     },
+    SpawnAgent {
+        objective_id: ObjectiveId,
+        content: String,
+        dir: PathBuf,
+        spawned_by: AgentId,
+    },
     Kill {
         agent_id: AgentId,
     },

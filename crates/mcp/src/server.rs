@@ -22,6 +22,7 @@ use meridian_core::store::{
 };
 
 use crate::state::HitlRequest;
+use crate::tools::agent::{GetAgentStatusTool, GetEventLogTool, SpawnAgentTool};
 use crate::tools::checkpoint::{GetSessionCheckpointTool, SerializeAndPersistTool};
 use crate::tools::hitl::RequestHumanInputTool;
 use crate::tools::lifecycle::{GetDirectiveTool, ReportTokenEstimateTool, RequestContextResetTool};
@@ -79,6 +80,9 @@ where
             .with_async_tool::<GetObjectiveTreeTool>()
             .with_async_tool::<UpdateObjectiveTool>()
             .with_async_tool::<RequestHumanInputTool>()
+            .with_async_tool::<SpawnAgentTool>()
+            .with_async_tool::<GetAgentStatusTool>()
+            .with_async_tool::<GetEventLogTool>()
     }
 
     pub fn new(

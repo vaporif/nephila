@@ -55,6 +55,8 @@ pub struct SupervisionConfig {
     pub max_restarts: u32,
     #[serde(default = "default_restart_window_secs")]
     pub restart_window_secs: u64,
+    #[serde(default = "default_max_agent_depth")]
+    pub max_agent_depth: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +142,9 @@ fn default_max_restarts() -> u32 {
 fn default_restart_window_secs() -> u64 {
     60
 }
+fn default_max_agent_depth() -> u32 {
+    3
+}
 fn default_summarizer_backend() -> String {
     "claude".into()
 }
@@ -219,6 +224,7 @@ drain_timeout_secs = 60
 default_strategy = "one_for_one"
 max_restarts = 5
 restart_window_secs = 60
+max_agent_depth = 3
 
 [summarizer]
 backend = "claude"
@@ -235,5 +241,6 @@ max_hitl_rerequests = 3
         let config: MeridianConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.meridian.storage_backend, "sqlite");
         assert_eq!(config.supervision.max_restarts, 5);
+        assert_eq!(config.supervision.max_agent_depth, 3);
     }
 }

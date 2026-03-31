@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod checkpoint;
 pub mod hitl;
 pub mod lifecycle;

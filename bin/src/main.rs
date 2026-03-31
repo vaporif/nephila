@@ -94,8 +94,9 @@ async fn main() -> Result<()> {
     let orch_store = store.clone();
     let orch_event_tx = event_tx.clone();
     let orch_hitl = hitl_requests.clone();
+    let max_agent_depth = config.supervision.max_agent_depth;
     let cmd_handle = tokio::spawn(async move {
-        match orchestrator::Orchestrator::load(orch_store, orch_event_tx, orch_hitl).await {
+        match orchestrator::Orchestrator::load(orch_store, orch_event_tx, orch_hitl, max_agent_depth).await {
             Ok(mut orch) => orch.run(cmd_rx).await,
             Err(e) => tracing::error!(%e, "failed to load orchestrator"),
         }

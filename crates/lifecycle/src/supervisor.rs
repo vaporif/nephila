@@ -53,6 +53,7 @@ mod tests {
             default_strategy: "one_for_one".into(),
             max_restarts: 3,
             restart_window_secs: 60,
+            max_agent_depth: 3,
         };
         let mut tracker = RestartTracker::new(config);
 
