@@ -56,6 +56,7 @@
           ];
         LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         ORT_DYLIB_PATH = "${onnxruntime-bin}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
+        ORT_LIB_LOCATION = "${onnxruntime-bin}/lib";
       };
 
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
