@@ -35,3 +35,4 @@ meridian-embedding
 meridian.db
 meridian.db*
 .mcp.json
+.worktrees
