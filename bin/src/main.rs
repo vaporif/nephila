@@ -40,12 +40,12 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
     let cli = Cli::parse();
 
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "meridian=debug".into());
+
     let tui_log = if cli.headless {
         tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "meridian=debug".into()),
-            )
+            .with(env_filter)
             .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
             .init();
         None
@@ -53,10 +53,7 @@ async fn main() -> Result<()> {
         let tui_log = meridian_tui::tui_tracing::TuiLogBuffer::new();
         let tui_layer = meridian_tui::tui_tracing::TuiTracingLayer::new(tui_log.clone());
         tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "meridian=debug".into()),
-            )
+            .with(env_filter)
             .with(tui_layer)
             .init();
         Some(tui_log)
@@ -111,25 +108,27 @@ async fn main() -> Result<()> {
 
     tracing::info!(%bound_addr, "MCP server listening");
 
-    let orch_store = store.clone();
-    let orch_event_tx = event_tx.clone();
-    let orch_hitl = hitl_requests.clone();
-    let max_agent_depth = config.supervision.max_agent_depth;
-    let connector_config = config.connector.clone();
-    let cmd_handle = tokio::spawn(async move {
-        match orchestrator::Orchestrator::load(
-            orch_store,
-            orch_event_tx,
-            orch_hitl,
-            max_agent_depth,
-            connector_config,
-        )
-        .await
-        {
-            Ok(mut orch) => orch.run(cmd_rx).await,
-            Err(e) => tracing::error!(%e, "failed to load orchestrator"),
-        }
-    });
+    let cmd_handle = {
+        let store = store.clone();
+        let event_tx = event_tx.clone();
+        let hitl_requests = hitl_requests.clone();
+        let max_agent_depth = config.supervision.max_agent_depth;
+        let connector_config = config.connector.clone();
+        tokio::spawn(async move {
+            match orchestrator::Orchestrator::load(
+                store,
+                event_tx,
+                hitl_requests,
+                max_agent_depth,
+                connector_config,
+            )
+            .await
+            {
+                Ok(mut orch) => orch.run(cmd_rx).await,
+                Err(e) => tracing::error!(%e, "failed to load orchestrator"),
+            }
+        })
+    };
 
     if cli.headless {
         tracing::info!("Running in headless mode, press Ctrl+C to stop");

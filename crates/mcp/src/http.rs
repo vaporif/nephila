@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::Router;
@@ -24,7 +24,6 @@ use rmcp::transport::streamable_http_server::{
 use crate::server::MeridianMcpServer;
 use crate::state::HitlRequest;
 
-/// Start the MCP HTTP server and return its task handle and bound address.
 pub async fn serve<S, E>(
     store: Arc<S>,
     embedder: Arc<E>,
@@ -46,9 +45,12 @@ where
         + 'static,
     E: EmbeddingProvider + 'static,
 {
-    let bind_addr: SocketAddr = format!("{}:{}", config.mcp.host, config.mcp.port)
+    let ip: IpAddr = config
+        .mcp
+        .host
         .parse()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let bind_addr = SocketAddr::new(ip, config.mcp.port);
 
     let http_config =
         StreamableHttpServerConfig::default().with_cancellation_token(cancellation_token.clone());
