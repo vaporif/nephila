@@ -36,3 +36,7 @@ archive_after_cycles = 50
 refresh_rate_ms = 100
 max_event_log_lines = 1000
 max_hitl_rerequests = 3
+
+[mcp]
+# host = "127.0.0.1"
+# port = 0

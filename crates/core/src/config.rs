@@ -11,6 +11,8 @@ pub struct MeridianConfig {
     pub tui: TuiConfig,
     #[serde(default)]
     pub connector: ConnectorConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +101,27 @@ pub struct ConnectorConfig {
     pub openai_base_url: Option<String>,
     pub openai_api_key_env: Option<String>,
     pub default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    #[serde(default = "default_mcp_host")]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            host: default_mcp_host(),
+            port: 0,
+        }
+    }
+}
+
+fn default_mcp_host() -> String {
+    "127.0.0.1".into()
 }
 
 impl Default for ConnectorConfig {
@@ -195,7 +218,7 @@ fn default_max_hitl_rerequests() -> u32 {
 impl Default for MeridianConfig {
     fn default() -> Self {
         toml::from_str(
-            "[meridian]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n[connector]\n",
+            "[meridian]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n[connector]\n[mcp]\n",
         )
         .expect("default config must parse")
     }
@@ -293,5 +316,30 @@ anthropic_api_key_env = "MY_KEY"
     fn test_default_config_has_connector() {
         let config = MeridianConfig::default();
         assert_eq!(config.connector.claude_binary, "claude");
+    }
+
+    #[test]
+    fn test_mcp_config_defaults() {
+        let config = MeridianConfig::default();
+        assert_eq!(config.mcp.host, "127.0.0.1");
+        assert_eq!(config.mcp.port, 0);
+    }
+
+    #[test]
+    fn test_mcp_config_explicit_port() {
+        let toml_str = r#"
+[meridian]
+[lifecycle]
+[supervision]
+[summarizer]
+[memory]
+[tui]
+[mcp]
+host = "0.0.0.0"
+port = 8080
+"#;
+        let config: MeridianConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.mcp.host, "0.0.0.0");
+        assert_eq!(config.mcp.port, 8080);
     }
 }
