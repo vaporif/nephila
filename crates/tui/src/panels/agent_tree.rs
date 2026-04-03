@@ -1,5 +1,5 @@
-use meridian_core::agent::{Agent, AgentState};
-use meridian_core::id::{AgentId, CheckpointId, ObjectiveId};
+use nephila_core::agent::{Agent, AgentState};
+use nephila_core::id::{AgentId, CheckpointId, ObjectiveId};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -245,8 +245,8 @@ impl StatefulWidget for AgentTreeWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meridian_core::agent::AgentState;
-    use meridian_core::id::{AgentId, ObjectiveId};
+    use nephila_core::agent::AgentState;
+    use nephila_core::id::{AgentId, ObjectiveId};
     use std::path::PathBuf;
 
     fn make_node(id: AgentId, state: AgentState, hitl: bool) -> AgentTreeNode {
@@ -273,7 +273,7 @@ mod tests {
             parent_id,
             ObjectiveId::new(),
             PathBuf::from("/tmp"),
-            meridian_core::agent::SpawnOrigin::Operator,
+            nephila_core::agent::SpawnOrigin::Operator,
             None,
         );
         parent.state = AgentState::Active;
@@ -282,7 +282,7 @@ mod tests {
             child_id,
             ObjectiveId::new(),
             PathBuf::from("/tmp"),
-            meridian_core::agent::SpawnOrigin::Agent(parent_id),
+            nephila_core::agent::SpawnOrigin::Agent(parent_id),
             None,
         );
 

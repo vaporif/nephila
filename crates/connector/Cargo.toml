@@ -1,5 +1,5 @@
 [package]
-name = "meridian-connector"
+name = "nephila-connector"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-meridian-core = { workspace = true }
+nephila-core = { workspace = true }
 tokio = { workspace = true, features = ["process", "sync", "fs"] }
 serde = { workspace = true }
 serde_json = { workspace = true }

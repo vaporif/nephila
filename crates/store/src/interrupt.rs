@@ -1,13 +1,13 @@
 use crate::SqliteStore;
 use crate::util::parse_rfc3339;
 use chrono::Utc;
-use meridian_core::checkpoint::InterruptType;
-use meridian_core::id::{AgentId, InterruptId};
-use meridian_core::interrupt::{InterruptRequest, InterruptStatus};
-use meridian_core::store::InterruptStore;
+use nephila_core::checkpoint::InterruptType;
+use nephila_core::id::{AgentId, InterruptId};
+use nephila_core::interrupt::{InterruptRequest, InterruptStatus};
+use nephila_core::store::InterruptStore;
 
 impl InterruptStore for SqliteStore {
-    async fn save(&self, request: &InterruptRequest) -> meridian_core::Result<()> {
+    async fn save(&self, request: &InterruptRequest) -> nephila_core::Result<()> {
         let req = request.clone();
         self.writer
             .execute(move |conn| {
@@ -69,7 +69,7 @@ impl InterruptStore for SqliteStore {
     async fn get_pending(
         &self,
         agent_id: AgentId,
-    ) -> meridian_core::Result<Option<InterruptRequest>> {
+    ) -> nephila_core::Result<Option<InterruptRequest>> {
         let result = self
             .writer
             .execute(move |conn| {
@@ -92,7 +92,7 @@ impl InterruptStore for SqliteStore {
         &self,
         id: InterruptId,
         response: serde_json::Value,
-    ) -> meridian_core::Result<()> {
+    ) -> nephila_core::Result<()> {
         let response_json = response.to_string();
         let now = Utc::now().to_rfc3339();
         self.writer
@@ -107,7 +107,7 @@ impl InterruptStore for SqliteStore {
         Ok(())
     }
 
-    async fn expire(&self, id: InterruptId) -> meridian_core::Result<()> {
+    async fn expire(&self, id: InterruptId) -> nephila_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
@@ -121,7 +121,7 @@ impl InterruptStore for SqliteStore {
         Ok(())
     }
 
-    async fn list_pending(&self) -> meridian_core::Result<Vec<InterruptRequest>> {
+    async fn list_pending(&self) -> nephila_core::Result<Vec<InterruptRequest>> {
         let results = self
             .writer
             .execute(|conn| {
@@ -195,10 +195,10 @@ fn row_to_interrupt(row: &rusqlite::Row) -> Result<InterruptRequest, rusqlite::E
 mod tests {
     use crate::SqliteStore;
     use chrono::Utc;
-    use meridian_core::checkpoint::InterruptType;
-    use meridian_core::id::{AgentId, CheckpointId, InterruptId, ObjectiveId};
-    use meridian_core::interrupt::{InterruptRequest, InterruptStatus};
-    use meridian_core::store::InterruptStore;
+    use nephila_core::checkpoint::InterruptType;
+    use nephila_core::id::{AgentId, CheckpointId, InterruptId, ObjectiveId};
+    use nephila_core::interrupt::{InterruptRequest, InterruptStatus};
+    use nephila_core::store::InterruptStore;
 
     async fn setup_store_with_agent_and_checkpoint() -> (SqliteStore, AgentId, CheckpointId) {
         let store = SqliteStore::open_in_memory(384).unwrap();

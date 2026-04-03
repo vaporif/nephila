@@ -1,12 +1,12 @@
 use crate::SqliteStore;
 use crate::util::parse_rfc3339;
 use chrono::{DateTime, Utc};
-use meridian_eventsourcing::id::{SpanId, TraceId};
-use meridian_eventsourcing::store::TracingStoreError;
-use meridian_eventsourcing::tracing::{SpanEvent, SpanLevel, SpanStatus, StoredSpan};
+use nephila_eventsourcing::id::{SpanId, TraceId};
+use nephila_eventsourcing::store::TracingStoreError;
+use nephila_eventsourcing::tracing::{SpanEvent, SpanLevel, SpanStatus, StoredSpan};
 use std::collections::HashMap;
 
-impl meridian_eventsourcing::store::TracingStore for SqliteStore {
+impl nephila_eventsourcing::store::TracingStore for SqliteStore {
     async fn record_span(&self, span: &StoredSpan) -> Result<(), TracingStoreError> {
         let span_id = span.span_id.0.clone();
         let trace_id = span.trace_id.0.clone();
@@ -173,9 +173,9 @@ fn row_to_span(row: &rusqlite::Row) -> Result<StoredSpan, rusqlite::Error> {
 mod tests {
     use crate::SqliteStore;
     use chrono::Utc;
-    use meridian_eventsourcing::id::{SpanId, TraceId};
-    use meridian_eventsourcing::store::TracingStore;
-    use meridian_eventsourcing::tracing::{SpanLevel, SpanStatus, StoredSpan};
+    use nephila_eventsourcing::id::{SpanId, TraceId};
+    use nephila_eventsourcing::store::TracingStore;
+    use nephila_eventsourcing::tracing::{SpanLevel, SpanStatus, StoredSpan};
     use std::collections::HashMap;
 
     fn make_store() -> SqliteStore {

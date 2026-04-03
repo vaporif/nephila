@@ -16,7 +16,7 @@ xMemory's solution: **decouple** the memory stream into semantic components orga
 
 Results: consistent gains in answer quality (BLEU, F1) and token efficiency across LoCoMo and PerLTQA benchmarks with three LLM backbones (Qwen3-8B, Llama-3.1-8B, GPT-5 nano). Covers evidence with ~half the tokens of naive RAG.
 
-This paper is directly relevant to Meridian's L2 memory retrieval layer -- it provides a concrete, empirically validated alternative to flat vector similarity search for agent memories.
+This paper is directly relevant to Nephila's L2 memory retrieval layer -- it provides a concrete, empirically validated alternative to flat vector similarity search for agent memories.
 
 ---
 
@@ -145,22 +145,22 @@ xMemory covers evidence with ~half the blocks and ~half the tokens.
 
 ---
 
-## Relation to Meridian
+## Relation to Nephila
 
 ### Where xMemory's Insights Apply
 
-Meridian's L2 memory layer currently uses flat vector similarity search (sqlite-vec) to retrieve detailed findings stored across agent lifecycles. This is exactly the scenario xMemory identifies as problematic:
+Nephila's L2 memory layer currently uses flat vector similarity search (sqlite-vec) to retrieve detailed findings stored across agent lifecycles. This is exactly the scenario xMemory identifies as problematic:
 
 1. **Bounded, coherent source**: All L2 memories come from agents working on related objectives in the same codebase. They are inherently correlated.
 2. **Near-duplicate accumulation**: Across multiple context reset cycles, agents may store overlapping observations about the same code, the same errors, the same architectural patterns.
 3. **Multi-fact queries**: When a fresh agent searches for context ("what do we know about the authentication module?"), the answer typically spans multiple related but distinct findings -- exactly where top-k similarity collapses.
 
-### What Meridian Already Has That Aligns
+### What Nephila Already Has That Aligns
 
-| xMemory Concept | Meridian Equivalent | Gap |
+| xMemory Concept | Nephila Equivalent | Gap |
 |---|---|---|
-| Four-level hierarchy | L0 (objectives) / L1 (summary) / L2 (detailed) | Meridian's layers are lifecycle-based, not semantic. L2 entries are flat. |
-| Semantic deduplication | `novelty_threshold = 0.95` | Meridian filters duplicates but doesn't organize non-duplicate entries into semantic components |
+| Four-level hierarchy | L0 (objectives) / L1 (summary) / L2 (detailed) | Nephila's layers are lifecycle-based, not semantic. L2 entries are flat. |
+| Semantic deduplication | `novelty_threshold = 0.95` | Nephila filters duplicates but doesn't organize non-duplicate entries into semantic components |
 | Memory linking | `memory_links` table (similarity-based auto-linking) | Exists but not used for retrieval navigation -- only stored |
 | Theme organization | None | No higher-level grouping of L2 memories |
 | Guidance objective for structure | None | No optimization of memory organization during construction |
@@ -210,7 +210,7 @@ For the `search_graph()` MCP tool, instead of returning a fixed number of result
 ### What NOT to Adopt
 
 **1. LLM-based semantic extraction during memory construction.**
-xMemory uses LLM calls to generate episode summaries, extract semantic nodes, and create themes. In Meridian's context, this would mean additional LLM API calls during `store_memory`, which conflicts with the goal of keeping the MCP server independent of the LLM. Consider using the local embedding model (fastembed) + clustering for theme management, and defer semantic extraction to the agent itself (let the agent store pre-distilled findings rather than raw dumps).
+xMemory uses LLM calls to generate episode summaries, extract semantic nodes, and create themes. In Nephila's context, this would mean additional LLM API calls during `store_memory`, which conflicts with the goal of keeping the MCP server independent of the LLM. Consider using the local embedding model (fastembed) + clustering for theme management, and defer semantic extraction to the agent itself (let the agent store pre-distilled findings rather than raw dumps).
 
 **2. Output logit-based uncertainty gating.**
 Stage II uses reader LLM logits to decide when to expand evidence. This requires access to output probabilities, which Claude's API may not expose. Use embedding-space similarity as a proxy for uncertainty, or let the agent self-report whether retrieved context is sufficient.
@@ -220,13 +220,13 @@ The Fano-inequality-based theoretical analysis is interesting but the practical 
 
 ---
 
-## Architectural Implications for Meridian
+## Architectural Implications for Nephila
 
 ### High-Value, Low-Effort Changes
 
 1. **Hierarchical tags on L2 entries**: Add a `theme` field to L2 memories. When storing, assign to nearest existing theme (by centroid similarity). Use themes as a pre-filter before vector search. This alone avoids the "collapsed retrieval" problem by ensuring results span multiple themes.
 
-2. **Use the existing `memory_links` table for navigation**: The kNN graph in xMemory is functionally identical to Meridian's `memory_links` table with `similarity_score`. Currently these links are stored but not used in retrieval. Use them: when retrieving L2 memories, traverse linked memories to broaden coverage beyond the query's embedding neighborhood.
+2. **Use the existing `memory_links` table for navigation**: The kNN graph in xMemory is functionally identical to Nephila's `memory_links` table with `similarity_score`. Currently these links are stored but not used in retrieval. Use them: when retrieving L2 memories, traverse linked memories to broaden coverage beyond the query's embedding neighborhood.
 
 3. **Budget-aware `search_graph()`**: Instead of returning top-k results, return results until a token budget is met. Prioritize diversity (one result per theme) before depth (multiple results from the same theme).
 
@@ -246,14 +246,14 @@ The Fano-inequality-based theoretical analysis is interesting but the practical 
 
 ## Key Takeaways
 
-1. **Flat vector similarity search is provably suboptimal for agent memory** -- the bounded, correlated nature of agent memories means top-k will return redundant spans. Meridian's current `search_graph()` has this problem.
+1. **Flat vector similarity search is provably suboptimal for agent memory** -- the bounded, correlated nature of agent memories means top-k will return redundant spans. Nephila's current `search_graph()` has this problem.
 
 2. **Structure during construction is more important than filtering during retrieval** -- the hierarchical memory alone (without adaptive retrieval) provides most of the gain over naive RAG. Getting the memory organization right matters more than sophisticated query-time logic.
 
 3. **Theme-level organization is the highest-leverage change** -- it prevents retrieval collapse and enables diversity without complex retrieval algorithms. Adding a simple `theme` grouping to L2 memories would capture much of the benefit.
 
-4. **Memory organization must be dynamic** -- 44.91% of nodes get reassigned as new memories arrive. Static organization degrades quickly. Meridian should plan for periodic restructuring, not just insert-time organization.
+4. **Memory organization must be dynamic** -- 44.91% of nodes get reassigned as new memories arrive. Static organization degrades quickly. Nephila should plan for periodic restructuring, not just insert-time organization.
 
-5. **Token efficiency and accuracy are not in tension** -- xMemory gets better answers with fewer tokens by being more precise about what to retrieve. This directly benefits Meridian, where every token in the fresh agent's context is precious.
+5. **Token efficiency and accuracy are not in tension** -- xMemory gets better answers with fewer tokens by being more precise about what to retrieve. This directly benefits Nephila, where every token in the fresh agent's context is precious.
 
-**Relevance to Meridian: HIGH** -- directly addresses the quality of L2 memory retrieval, which is a core mechanism for cross-reset knowledge transfer. The hierarchical organization and diversity-aware retrieval are concrete improvements over flat vector search that Meridian should incorporate.
+**Relevance to Nephila: HIGH** -- directly addresses the quality of L2 memory retrieval, which is a core mechanism for cross-reset knowledge transfer. The hierarchical organization and diversity-aware retrieval are concrete improvements over flat vector search that Nephila should incorporate.

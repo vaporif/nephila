@@ -16,5 +16,5 @@ mod sql;
 pub mod store;
 pub mod summarizer;
 
-pub use error::{MeridianError, Result};
+pub use error::{NephilaError, Result};
 pub use id::*;

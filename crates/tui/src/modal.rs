@@ -1,4 +1,4 @@
-use meridian_core::id::AgentId;
+use nephila_core::id::AgentId;
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -231,7 +231,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meridian_core::id::AgentId;
+    use nephila_core::id::AgentId;
 
     #[test]
     fn modal_is_open() {

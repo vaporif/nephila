@@ -7,14 +7,14 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
-use meridian_core::checkpoint::InterruptType;
-use meridian_core::command::OrchestratorCommand;
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::event::BusEvent;
-use meridian_core::id::{CheckpointId, InterruptId};
-use meridian_core::interrupt::{InterruptRequest, InterruptStatus};
-use meridian_core::store::{
+use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
+use nephila_core::checkpoint::InterruptType;
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::event::BusEvent;
+use nephila_core::id::{CheckpointId, InterruptId};
+use nephila_core::interrupt::{InterruptRequest, InterruptStatus};
+use nephila_core::store::{
     AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
@@ -57,7 +57,7 @@ fn hash_question(question: &str) -> String {
     format!("{:x}", hasher.finish())
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for RequestHumanInputTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for RequestHumanInputTool
 where
     S: AgentStore
         + CheckpointStore
@@ -71,7 +71,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
@@ -80,7 +80,7 @@ where
         // Get the agent's current checkpoint to tie the interrupt to
         let checkpoint_id = AgentStore::get(service.store.as_ref(), agent_id)
             .await
-            .map_err(meridian_err)?
+            .map_err(nephila_err)?
             .and_then(|a| a.checkpoint_id)
             .unwrap_or_else(CheckpointId::new);
 
@@ -103,7 +103,7 @@ where
 
         InterruptStore::save(service.store.as_ref(), &interrupt)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         let _ = service.event_tx.send(BusEvent::HitlRequested {
             agent_id,

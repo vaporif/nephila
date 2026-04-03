@@ -31,9 +31,9 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
 }
 
-impl From<StoreError> for meridian_core::MeridianError {
+impl From<StoreError> for nephila_core::NephilaError {
     fn from(e: StoreError) -> Self {
-        meridian_core::MeridianError::Storage(e.to_string())
+        nephila_core::NephilaError::Storage(e.to_string())
     }
 }
 

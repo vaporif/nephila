@@ -1,8 +1,8 @@
-# Meridian: Architecture Overview & Design Rationale
+# Nephila: Architecture Overview & Design Rationale
 
 **Date:** 2026-03-29
 
-This document captures the full context behind Meridian's design — the problem, the research, the decisions made and why, the alternatives rejected, and the inspirations drawn from existing systems. The companion spec (`docs/superpowers/specs/2026-03-29-meridian-design.md`) is the implementation reference; this document is the story behind it.
+This document captures the full context behind Nephila's design — the problem, the research, the decisions made and why, the alternatives rejected, and the inspirations drawn from existing systems. The companion spec (`docs/superpowers/specs/2026-03-29-nephila-design.md`) is the implementation reference; this document is the story behind it.
 
 ---
 
@@ -15,13 +15,13 @@ Existing solutions either:
 - **Use file-based handoffs** (Stoneforge, Continuous-Claude-v3) — works but loses semantic richness
 - **Delegate to sub-agents** (Claude Code Agent Teams) — helps but doesn't survive the parent's context exhaustion
 
-Nobody does the obvious thing: **kill the agent, save what it knows to a semantic memory store, and spawn a fresh one that picks up where the old one left off.** That's what Meridian does.
+Nobody does the obvious thing: **kill the agent, save what it knows to a semantic memory store, and spawn a fresh one that picks up where the old one left off.** That's what Nephila does.
 
 ---
 
 ## Core Insight
 
-Treat the LLM like a stateless process in an operating system. It runs, it does work, it accumulates state in "RAM" (context window). When RAM is full, checkpoint to "disk" (semantic memory), terminate the process, and start a fresh one that loads the checkpoint. The OS (Meridian) manages the lifecycle. The process (Claude) just reasons.
+Treat the LLM like a stateless process in an operating system. It runs, it does work, it accumulates state in "RAM" (context window). When RAM is full, checkpoint to "disk" (semantic memory), terminate the process, and start a fresh one that loads the checkpoint. The OS (Nephila) manages the lifecycle. The process (Claude) just reasons.
 
 This is directly inspired by the OS virtual memory analogy from MemGPT (2023), extended from memory management to full process lifecycle management. The Quine paper (arXiv:2603.18030, March 2026) independently arrived at the same idea using POSIX primitives (fork/exec/exit), confirming the concept is sound.
 
@@ -75,7 +75,7 @@ Four independent research agents investigated novelty across web, GitHub, academ
 |-------|-----------|------|
 | **MemGPT** (Packer et al., 2023) — virtual context management via OS memory paging analogy | CRITICAL — intellectual ancestor, extended from memory to process lifecycle | [arXiv:2310.08560](https://arxiv.org/abs/2310.08560) |
 | **Quine** (Ke, 2026) — LLM agents as POSIX processes with exec-based context renewal | CRITICAL — independently arrived at same spawn/checkpoint/respawn pattern | [arXiv:2603.18030](https://arxiv.org/abs/2603.18030) |
-| **CoALA** (Sumers et al., 2023) — cognitive architecture framework for language agents | CRITICAL — theoretical foundation, maps to Meridian's memory architecture | [arXiv:2309.02427](https://arxiv.org/abs/2309.02427) |
+| **CoALA** (Sumers et al., 2023) — cognitive architecture framework for language agents | CRITICAL — theoretical foundation, maps to Nephila's memory architecture | [arXiv:2309.02427](https://arxiv.org/abs/2309.02427) |
 | **Generative Agents** (Park et al., 2023) — memory stream + reflection + retrieval | HIGH — foundational memory consolidation pattern | [arXiv:2304.03442](https://arxiv.org/abs/2304.03442) |
 | **Reflexion** (Shinn et al., 2023) — verbal reinforcement via episodic memory across trials | HIGH — persistent episodic buffer maps to checkpoint mechanism | [arXiv:2303.11366](https://arxiv.org/abs/2303.11366) |
 | **Voyager** (Wang et al., 2023) — lifelong learning agent with persistent skill library | HIGH — external persistent memory, treats LLM as blackbox stateless engine | [arXiv:2305.16291](https://arxiv.org/abs/2305.16291) |
@@ -136,40 +136,40 @@ Notable community resources:
 
 ### ADR-2: Streamable HTTP Transport (Not stdio)
 
-**Context:** How does Meridian (MCP server) communicate with Claude (MCP client)?
+**Context:** How does Nephila (MCP server) communicate with Claude (MCP client)?
 
 **Options:**
-- **(A) stdio** — Claude spawns Meridian as a child process via stdin/stdout. Standard MCP pattern.
-- **(B) Streamable HTTP** — Meridian listens on a port, Claude connects via HTTP. Each agent gets a unique URL path.
-- **(C) stdio bridge** — Meridian spawns a thin shim per agent that tunnels back to the main process via Unix socket.
+- **(A) stdio** — Claude spawns Nephila as a child process via stdin/stdout. Standard MCP pattern.
+- **(B) Streamable HTTP** — Nephila listens on a port, Claude connects via HTTP. Each agent gets a unique URL path.
+- **(C) stdio bridge** — Nephila spawns a thin shim per agent that tunnels back to the main process via Unix socket.
 
 **Decision:** B — streamable HTTP.
 
-**Rationale:** stdio has a fundamental direction problem. In stdio MCP, the *client* (Claude) spawns the *server* as a child process. But Meridian's architecture needs the opposite — Meridian spawns Claude, and Meridian is the long-lived server. If Claude spawns Meridian via stdio, you get a fresh Meridian per agent instance, defeating the purpose of a single orchestrator managing multiple agents.
+**Rationale:** stdio has a fundamental direction problem. In stdio MCP, the *client* (Claude) spawns the *server* as a child process. But Nephila's architecture needs the opposite — Nephila spawns Claude, and Nephila is the long-lived server. If Claude spawns Nephila via stdio, you get a fresh Nephila per agent instance, defeating the purpose of a single orchestrator managing multiple agents.
 
-Streamable HTTP solves this cleanly: one Meridian process, many Claude connections. Agent identity is baked into the URL path (`/agent/{agent_id}`). No custom bridging needed.
+Streamable HTTP solves this cleanly: one Nephila process, many Claude connections. Agent identity is baked into the URL path (`/agent/{agent_id}`). No custom bridging needed.
 
 Option C (stdio bridge) works but adds a shim process per agent for no real benefit.
 
-**Consequences:** Requires Meridian to run an HTTP server (Axum, already needed for future web UI). Claude must be configured with an MCP endpoint URL rather than a command. Minor: streamable HTTP is the current MCP standard (SSE is being phased out).
+**Consequences:** Requires Nephila to run an HTTP server (Axum, already needed for future web UI). Claude must be configured with an MCP endpoint URL rather than a command. Minor: streamable HTTP is the current MCP standard (SSE is being phased out).
 
 ---
 
 ### ADR-3: Orchestration Sidecar (Not Tool Proxy)
 
-**Context:** Should Meridian be Claude's only interface to the world, or should Claude keep its own tools?
+**Context:** Should Nephila be Claude's only interface to the world, or should Claude keep its own tools?
 
 **Options:**
-- **(A) Full proxy** — Claude only talks to Meridian. Meridian proxies filesystem, bash, git, everything.
-- **(B) Sidecar** — Claude keeps its own tools (Read, Write, Bash, Git). Meridian handles orchestration only (checkpoint, memory, objectives, directives).
+- **(A) Full proxy** — Claude only talks to Nephila. Nephila proxies filesystem, bash, git, everything.
+- **(B) Sidecar** — Claude keeps its own tools (Read, Write, Bash, Git). Nephila handles orchestration only (checkpoint, memory, objectives, directives).
 
 **Decision:** B — sidecar.
 
-**Rationale:** If Meridian proxies every tool, it becomes a massive tool proxy with no benefit. Claude needs to read files, run commands, and use git for actual work. Routing all of that through Meridian adds latency, complexity, and a massive API surface for no orchestration value. Meridian doesn't need to know what Claude does with files — it only cares about lifecycle, memory, and objectives.
+**Rationale:** If Nephila proxies every tool, it becomes a massive tool proxy with no benefit. Claude needs to read files, run commands, and use git for actual work. Routing all of that through Nephila adds latency, complexity, and a massive API surface for no orchestration value. Nephila doesn't need to know what Claude does with files — it only cares about lifecycle, memory, and objectives.
 
-MCP config is additive in Claude Code. Meridian drops a `.mcp.json` in the agent's working directory pointing to its endpoint. Claude picks it up alongside its standard tools.
+MCP config is additive in Claude Code. Nephila drops a `.mcp.json` in the agent's working directory pointing to its endpoint. Claude picks it up alongside its standard tools.
 
-**Consequences:** Meridian has incomplete visibility into what Claude does (can't see filesystem reads, bash output). This is acceptable — Meridian tracks token usage via self-reporting, not by observing all activity.
+**Consequences:** Nephila has incomplete visibility into what Claude does (can't see filesystem reads, bash output). This is acceptable — Nephila tracks token usage via self-reporting, not by observing all activity.
 
 ---
 
@@ -178,9 +178,9 @@ MCP config is additive in Claude Code. Meridian drops a `.mcp.json` in the agent
 **Context:** When agents spawn child agents, who "owns" the children? Should there be a parent-child lifecycle relationship?
 
 **Options:**
-- **(A) Flat** — Meridian owns all agents. No parent controls children. `spawned_by` is metadata, not authority.
+- **(A) Flat** — Nephila owns all agents. No parent controls children. `spawned_by` is metadata, not authority.
 - **(B) Hierarchical** — Parent agent owns children. If parent resets, respawned version inherits children. If parent dies, children are orphaned.
-- **(C) Hierarchical with promotion** — Like B, but orphaned agents get promoted to Meridian or adopted.
+- **(C) Hierarchical with promotion** — Like B, but orphaned agents get promoted to Nephila or adopted.
 
 **Decision:** A — flat ownership.
 
@@ -188,11 +188,11 @@ MCP config is additive in Claude Code. Meridian drops a `.mcp.json` in the agent
 
 Deep nesting is a footgun. A spawns B, B spawns C, C spawns D. B resets. Now C and D are orphans nested two levels deep. Promotion logic adds complexity for every edge case.
 
-Claude doesn't need lifecycle control — it needs coordination. "Spawn something to write tests" and later "are the tests done?" That's a query to Meridian, not parental authority.
+Claude doesn't need lifecycle control — it needs coordination. "Spawn something to write tests" and later "are the tests done?" That's a query to Nephila, not parental authority.
 
-With flat ownership: if A resets, respawned A queries Meridian for fresh child status. If A dies, B and C continue — Meridian reassigns or lets them finish. No orphan crisis. This is the Kubernetes model: the control plane owns all pods, logical groupings track relationships.
+With flat ownership: if A resets, respawned A queries Nephila for fresh child status. If A dies, B and C continue — Nephila reassigns or lets them finish. No orphan crisis. This is the Kubernetes model: the control plane owns all pods, logical groupings track relationships.
 
-**Consequences:** No cascading lifecycle control. An agent can't kill its children directly — it requests Meridian to do it. This is a feature, not a limitation.
+**Consequences:** No cascading lifecycle control. An agent can't kill its children directly — it requests Nephila to do it. This is a feature, not a limitation.
 
 ---
 
@@ -227,7 +227,7 @@ With flat ownership: if A resets, respawned A queries Meridian for fresh child s
 - Zero additional infrastructure — no Qdrant process to run. Single binary + one `.db` file.
 - ACID transactions for free — checkpoint integrity (write L2, then L1, then L0 atomically) becomes a real SQL transaction. No partial checkpoints possible.
 - A-MEM linking is simpler — foreign keys, JOINs to follow links, vs managing point ID arrays in Qdrant payloads.
-- Backup is `cp meridian.db meridian.db.bak`.
+- Backup is `cp nephila.db nephila.db.bak`.
 - Latency — no network hop, everything in-process.
 
 For MVP-1 (single agent, hundreds to low thousands of memory entries), SQLite vector search is perfectly adequate. Qdrant becomes relevant at 100k+ vectors with concurrent writes from many agents.
@@ -260,31 +260,31 @@ For MVP-1, `ClaudeSummarizer` is simplest — Claude writes all three layers as 
 
 ### ADR-8: Token Tracking via Self-Report + Directive Polling
 
-**Context:** How does Meridian know when Claude is approaching the context threshold?
+**Context:** How does Nephila know when Claude is approaching the context threshold?
 
 **Options:**
 - **(A) Claude self-reports** — Claude calls `report_token_estimate(used, remaining)` periodically.
-- **(B) Meridian estimates** — Track MCP traffic, apply a multiplier for unseen activity.
-- **(C) Directive-based polling** — Claude checks `get_directive()` each cycle. Meridian sets threshold flags.
+- **(B) Nephila estimates** — Track MCP traffic, apply a multiplier for unseen activity.
+- **(C) Directive-based polling** — Claude checks `get_directive()` each cycle. Nephila sets threshold flags.
 
 **Decision:** A+C combined.
 
-**Rationale:** Meridian sees only its own MCP traffic — it doesn't see filesystem reads, bash output, or Claude's internal reasoning. It can estimate a lower bound but not the full picture. Claude knows its own context best.
+**Rationale:** Nephila sees only its own MCP traffic — it doesn't see filesystem reads, bash output, or Claude's internal reasoning. It can estimate a lower bound but not the full picture. Claude knows its own context best.
 
-The two are paired: Claude calls `report_token_estimate` and `get_directive` together, at matching frequencies that increase near the threshold (every 10 calls → every 3 → every 1). This ensures Meridian has fresh data when it needs to decide on `prepare_reset`, and Claude reads the directive immediately after reporting.
+The two are paired: Claude calls `report_token_estimate` and `get_directive` together, at matching frequencies that increase near the threshold (every 10 calls → every 3 → every 1). This ensures Nephila has fresh data when it needs to decide on `prepare_reset`, and Claude reads the directive immediately after reporting.
 
-Safety buffer: if Meridian's conservative estimate hits 85% before Claude starts draining, force-kill and use CrashSummarizer.
+Safety buffer: if Nephila's conservative estimate hits 85% before Claude starts draining, force-kill and use CrashSummarizer.
 
-**Consequences:** Relies on Claude following the system prompt instructions. If Claude ignores reporting instructions, Meridian falls back to its own estimate with a conservative multiplier.
+**Consequences:** Relies on Claude following the system prompt instructions. If Claude ignores reporting instructions, Nephila falls back to its own estimate with a conservative multiplier.
 
 ---
 
 ### ADR-9: `get_directive` as Tool (Not MCP Resource)
 
-**Context:** How does Meridian communicate lifecycle directives to Claude?
+**Context:** How does Nephila communicate lifecycle directives to Claude?
 
 **Options:**
-- **(A) MCP resource** — Claude reads `meridian://agent/{id}/directive` as a resource. Elegant, declarative.
+- **(A) MCP resource** — Claude reads `nephila://agent/{id}/directive` as a resource. Elegant, declarative.
 - **(B) MCP tool** — Claude calls `get_directive()`. Explicit, proven.
 
 **Decision:** B — tool.
@@ -299,7 +299,7 @@ If resource polling is later verified, it can be added as an optional optimizati
 
 ### ADR-10: TUI First (Not Web UI)
 
-**Context:** How does the human operator interact with Meridian?
+**Context:** How does the human operator interact with Nephila?
 
 **Decision:** ratatui TUI for MVP-1. Web UI (Axum + WebSocket) as a future addition.
 
@@ -343,11 +343,11 @@ The TUI is the human-in-the-loop interface: agent status, objective tree, task b
 | Risk | Mitigation |
 |------|------------|
 | MVP-1 is too large | The single-agent loop is the minimal viable proof. Cut TUI features if needed (text-only log first, panels later). |
-| Integration glue dominates effort | This was identified as the main risk upfront. Meridian is fundamentally an integration project. The spec is detailed precisely to reduce glue-layer ambiguity. |
+| Integration glue dominates effort | This was identified as the main risk upfront. Nephila is fundamentally an integration project. The spec is detailed precisely to reduce glue-layer ambiguity. |
 
 ---
 
-## What Meridian Is Not
+## What Nephila Is Not
 
 - **Not a framework** — it's a runtime. You don't import it, you run it.
 - **Not an API wrapper** — it uses Claude Code CLI, not the Anthropic API. No per-token costs (Claude Max subscription).

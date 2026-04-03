@@ -34,21 +34,21 @@ edition = "2024"
 license = "MIT"
 authors = ["Dmytro Onypko <vaporif@proton.me>"]
 description = "AI orchestration framework with RAG capabilities"
-repository = "https://github.com/vaporif/meridian"
+repository = "https://github.com/vaporif/nephila"
 readme = "README.md"
 keywords = ["ai", "orchestration", "rag", "llm", "embeddings"]
 categories = ["development-tools"]
 
 [workspace.dependencies]
 # Internal
-meridian-core = { path = "crates/core" }
-meridian-store = { path = "crates/store" }
-meridian-embedding = { path = "crates/embedding" }
-meridian-lifecycle = { path = "crates/lifecycle" }
-meridian-mcp = { path = "crates/mcp" }
-meridian-connector = { path = "crates/connector" }
-meridian-eventsourcing = { path = "crates/eventsourcing" }
-meridian-tui = { path = "crates/tui" }
+nephila-core = { path = "crates/core" }
+nephila-store = { path = "crates/store" }
+nephila-embedding = { path = "crates/embedding" }
+nephila-lifecycle = { path = "crates/lifecycle" }
+nephila-mcp = { path = "crates/mcp" }
+nephila-connector = { path = "crates/connector" }
+nephila-eventsourcing = { path = "crates/eventsourcing" }
+nephila-tui = { path = "crates/tui" }
 
 # Async
 tokio = { version = "1", features = ["full"] }

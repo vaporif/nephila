@@ -97,8 +97,8 @@ jobs:
       - name: Nix build deps
         run: nix build .#cargoArtifacts
 
-      - name: Nix build meridian
-        run: nix build .#meridian
+      - name: Nix build nephila
+        run: nix build .#nephila
 
   gitleaks:
     name: Gitleaks

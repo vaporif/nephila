@@ -1,11 +1,11 @@
-use meridian_core::agent::{Agent, AgentState, SpawnOrigin};
-use meridian_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk, ReducerKind};
-use meridian_core::directive::Directive;
-use meridian_core::id::*;
-use meridian_core::memory::{Embedding, LifecycleState, MemoryEntry};
-use meridian_core::objective::{NewObjective, ObjectiveStatus};
-use meridian_core::store::*;
-use meridian_store::SqliteStore;
+use nephila_core::agent::{Agent, AgentState, SpawnOrigin};
+use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk, ReducerKind};
+use nephila_core::directive::Directive;
+use nephila_core::id::*;
+use nephila_core::memory::{Embedding, LifecycleState, MemoryEntry};
+use nephila_core::objective::{NewObjective, ObjectiveStatus};
+use nephila_core::store::*;
+use nephila_store::SqliteStore;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 

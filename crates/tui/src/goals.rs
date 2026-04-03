@@ -1,5 +1,5 @@
-use meridian_core::id::{AgentId, ObjectiveId};
-use meridian_core::objective::ObjectiveStatus;
+use nephila_core::id::{AgentId, ObjectiveId};
+use nephila_core::objective::ObjectiveStatus;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -127,7 +127,7 @@ pub fn create_template_file(goals_dir: &Path) -> io::Result<PathBuf> {
     Ok(path)
 }
 
-const MAPPING_FILE: &str = ".meridian-goals.json";
+const MAPPING_FILE: &str = ".nephila-goals.json";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct GoalMapping {

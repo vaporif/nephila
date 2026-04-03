@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use meridian_core::id::AgentId;
+use nephila_core::id::AgentId;
 use serde::{Deserialize, Serialize};
 
 use crate::config::SpawnConfig;

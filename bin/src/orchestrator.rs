@@ -2,16 +2,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use meridian_connector::{ClaudeCodeConnector, TaskConnectorKind};
-use meridian_core::agent::{Agent, AgentCommand, AgentEvent, SpawnOrigin};
-use meridian_core::command::OrchestratorCommand;
-use meridian_core::config::ConnectorConfig;
-use meridian_core::directive::Directive;
-use meridian_core::event::BusEvent;
-use meridian_core::id::{AgentId, ObjectiveId};
-use meridian_core::store::AgentStore;
-use meridian_mcp::state::HitlRequest;
-use meridian_store::SqliteStore;
+use nephila_connector::{ClaudeCodeConnector, TaskConnectorKind};
+use nephila_core::agent::{Agent, AgentCommand, AgentEvent, SpawnOrigin};
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::config::ConnectorConfig;
+use nephila_core::directive::Directive;
+use nephila_core::event::BusEvent;
+use nephila_core::id::{AgentId, ObjectiveId};
+use nephila_core::store::AgentStore;
+use nephila_mcp::state::HitlRequest;
+use nephila_store::SqliteStore;
 use tokio::sync::{RwLock, broadcast, mpsc};
 
 pub struct Orchestrator {
@@ -243,12 +243,12 @@ impl Orchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meridian_core::agent::Agent;
-    use meridian_core::id::{AgentId, ObjectiveId};
+    use nephila_core::agent::Agent;
+    use nephila_core::id::{AgentId, ObjectiveId};
     use std::path::PathBuf;
 
     fn make_agent(id: AgentId, spawned_by: Option<AgentId>) -> Agent {
-        use meridian_core::agent::SpawnOrigin;
+        use nephila_core::agent::SpawnOrigin;
         let origin = match spawned_by {
             Some(parent) => SpawnOrigin::Agent(parent),
             None => SpawnOrigin::Operator,

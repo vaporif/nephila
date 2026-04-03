@@ -1,4 +1,4 @@
-# Meridian MVP-1 Status
+# Nephila MVP-1 Status
 
 **Updated:** 2026-04-03
 

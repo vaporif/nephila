@@ -1,5 +1,5 @@
 [package]
-name = "meridian-core"
+name = "nephila-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -23,6 +23,6 @@ tokio = { workspace = true, features = ["sync"] }
 toml = { workspace = true }
 strum = { workspace = true }
 rusqlite = { workspace = true, optional = true }
-meridian-eventsourcing = { workspace = true }
+nephila-eventsourcing = { workspace = true }
 
 [dev-dependencies]

@@ -1,17 +1,17 @@
 use crate::SqliteStore;
 use crate::util::{bytes_to_f32_vec, f32_slice_to_bytes, parse_rfc3339};
-use meridian_core::id::EntryId;
-use meridian_core::memory::{Embedding, LifecycleState, Link, MemoryEntry, SearchResult};
-use meridian_core::store::MemoryStore;
+use nephila_core::id::EntryId;
+use nephila_core::memory::{Embedding, LifecycleState, Link, MemoryEntry, SearchResult};
+use nephila_core::store::MemoryStore;
 
 const FIND_SIMILAR_MAX_K: usize = 100;
 
 impl MemoryStore for SqliteStore {
-    async fn store(&self, entry: MemoryEntry) -> meridian_core::Result<EntryId> {
+    async fn store(&self, entry: MemoryEntry) -> nephila_core::Result<EntryId> {
         let id = entry.id;
         let emb_bytes = f32_slice_to_bytes(&entry.embedding);
         let tags_json =
-            serde_json::to_string(&entry.tags).map_err(meridian_core::MeridianError::from)?;
+            serde_json::to_string(&entry.tags).map_err(nephila_core::NephilaError::from)?;
         self.writer
             .execute(move |conn| {
                 let now = entry.created_at.to_rfc3339();
@@ -47,7 +47,7 @@ impl MemoryStore for SqliteStore {
         Ok(id)
     }
 
-    async fn get(&self, id: EntryId) -> meridian_core::Result<Option<MemoryEntry>> {
+    async fn get(&self, id: EntryId) -> nephila_core::Result<Option<MemoryEntry>> {
         let entry = self
             .writer
             .execute(move |conn| {
@@ -69,7 +69,7 @@ impl MemoryStore for SqliteStore {
         &self,
         query: &Embedding,
         limit: usize,
-    ) -> meridian_core::Result<Vec<SearchResult>> {
+    ) -> nephila_core::Result<Vec<SearchResult>> {
         let query_bytes = f32_slice_to_bytes(query);
         let results = self
             .writer
@@ -113,7 +113,7 @@ impl MemoryStore for SqliteStore {
         &self,
         embedding: &Embedding,
         threshold: f32,
-    ) -> meridian_core::Result<Vec<(EntryId, f32)>> {
+    ) -> nephila_core::Result<Vec<(EntryId, f32)>> {
         let query_bytes = f32_slice_to_bytes(embedding);
         let results = self
             .writer
@@ -146,7 +146,7 @@ impl MemoryStore for SqliteStore {
         Ok(results)
     }
 
-    async fn update_links(&self, id: EntryId, links: Vec<Link>) -> meridian_core::Result<()> {
+    async fn update_links(&self, id: EntryId, links: Vec<Link>) -> nephila_core::Result<()> {
         self.writer
             .execute(move |conn| {
                 let tx = conn.unchecked_transaction()?;
@@ -181,7 +181,7 @@ impl MemoryStore for SqliteStore {
         &self,
         id: EntryId,
         _depth: usize,
-    ) -> meridian_core::Result<Vec<MemoryEntry>> {
+    ) -> nephila_core::Result<Vec<MemoryEntry>> {
         let entries = self
             .writer
             .execute(move |conn| {
@@ -204,7 +204,7 @@ impl MemoryStore for SqliteStore {
         &self,
         id: EntryId,
         new_state: LifecycleState,
-    ) -> meridian_core::Result<()> {
+    ) -> nephila_core::Result<()> {
         self.writer
             .execute(move |conn| {
                 let rows = conn.execute(
@@ -217,11 +217,11 @@ impl MemoryStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::EntryNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::EntryNotFound(id))?;
         Ok(())
     }
 
-    async fn increment_access(&self, id: EntryId) -> meridian_core::Result<()> {
+    async fn increment_access(&self, id: EntryId) -> nephila_core::Result<()> {
         self.writer
             .execute(move |conn| {
                 let rows = conn.execute(
@@ -234,7 +234,7 @@ impl MemoryStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::EntryNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::EntryNotFound(id))?;
         Ok(())
     }
 }
@@ -269,9 +269,9 @@ fn row_to_memory(row: &rusqlite::Row) -> Result<MemoryEntry, rusqlite::Error> {
 mod tests {
     use crate::test_util::{make_agent_and_store, make_embedding};
     use chrono::Utc;
-    use meridian_core::id::EntryId;
-    use meridian_core::memory::{LifecycleState, Link, MemoryEntry};
-    use meridian_core::store::MemoryStore;
+    use nephila_core::id::EntryId;
+    use nephila_core::memory::{LifecycleState, Link, MemoryEntry};
+    use nephila_core::store::MemoryStore;
 
     #[tokio::test]
     async fn store_and_get() {

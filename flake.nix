@@ -36,7 +36,7 @@
 
       commonArgs = {
         inherit src;
-        pname = "meridian";
+        pname = "nephila";
         strictDeps = true;
         nativeBuildInputs =
           [
@@ -61,19 +61,19 @@
 
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-      meridianUnwrapped = craneLib.buildPackage (commonArgs
+      nephilaUnwrapped = craneLib.buildPackage (commonArgs
         // {
           inherit cargoArtifacts;
           # Embedding tests need network (HuggingFace model download)
-          cargoTestExtraArgs = "--workspace --exclude meridian-embedding";
+          cargoTestExtraArgs = "--workspace --exclude nephila-embedding";
         });
 
-      meridian = pkgs.symlinkJoin {
-        name = "meridian";
-        paths = [meridianUnwrapped];
+      nephila = pkgs.symlinkJoin {
+        name = "nephila";
+        paths = [nephilaUnwrapped];
         nativeBuildInputs = [pkgs.makeWrapper];
         postBuild = ''
-          wrapProgram $out/bin/meridian \
+          wrapProgram $out/bin/nephila \
             --set ORT_DYLIB_PATH "${onnxruntime-bin}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}"
         '';
       };
@@ -89,14 +89,14 @@
       ];
     in {
       packages = {
-        inherit meridian cargoArtifacts;
-        default = meridian;
+        inherit nephila cargoArtifacts;
+        default = nephila;
       };
 
       checks = {
         fmt = craneLib.cargoFmt {
           inherit src;
-          pname = "meridian";
+          pname = "nephila";
         };
 
         taplo =

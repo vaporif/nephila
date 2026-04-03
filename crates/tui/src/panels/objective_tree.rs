@@ -1,4 +1,4 @@
-use meridian_core::objective::ObjectiveStatus;
+use nephila_core::objective::ObjectiveStatus;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -208,8 +208,8 @@ impl StatefulWidget for ObjectiveTreeWidget {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meridian_core::id::ObjectiveId;
-    use meridian_core::objective::ObjectiveStatus;
+    use nephila_core::id::ObjectiveId;
+    use nephila_core::objective::ObjectiveStatus;
     use std::path::PathBuf;
 
     fn make_root(title: &str, status: ObjectiveStatus) -> GoalObjective {

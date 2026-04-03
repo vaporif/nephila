@@ -1,5 +1,5 @@
 [package]
-name = "meridian-store"
+name = "nephila-store"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,8 +11,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-meridian-core = { workspace = true, features = ["rusqlite"] }
-meridian-eventsourcing = { workspace = true }
+nephila-core = { workspace = true, features = ["rusqlite"] }
+nephila-eventsourcing = { workspace = true }
 rusqlite = { workspace = true }
 sqlite-vec = { workspace = true }
 tokio = { workspace = true }

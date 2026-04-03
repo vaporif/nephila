@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use meridian_core::MeridianError;
+use nephila_core::NephilaError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectorError {
@@ -32,7 +32,7 @@ pub enum ConnectorError {
     Other(Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl From<ConnectorError> for MeridianError {
+impl From<ConnectorError> for NephilaError {
     fn from(err: ConnectorError) -> Self {
         Self::Connector(err.to_string())
     }
@@ -43,37 +43,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auth_error_converts_to_meridian_error() {
+    fn auth_error_converts_to_nephila_error() {
         let err = ConnectorError::Auth("bad key".into());
-        let me: MeridianError = err.into();
-        assert!(matches!(me, MeridianError::Connector(_)));
+        let me: NephilaError = err.into();
+        assert!(matches!(me, NephilaError::Connector(_)));
         assert!(me.to_string().contains("authentication error: bad key"));
     }
 
     #[test]
-    fn rate_limit_converts_to_meridian_error() {
+    fn rate_limit_converts_to_nephila_error() {
         let err = ConnectorError::RateLimit {
             retry_after: Some(Duration::from_secs(30)),
         };
-        let me: MeridianError = err.into();
-        assert!(matches!(me, MeridianError::Connector(_)));
+        let me: NephilaError = err.into();
+        assert!(matches!(me, NephilaError::Connector(_)));
     }
 
     #[test]
-    fn process_error_converts_to_meridian_error() {
+    fn process_error_converts_to_nephila_error() {
         let err = ConnectorError::Process {
             exit_code: Some(1),
             stderr: "segfault".into(),
         };
-        let me: MeridianError = err.into();
+        let me: NephilaError = err.into();
         assert!(me.to_string().contains("segfault"));
     }
 
     #[test]
-    fn other_error_converts_to_meridian_error() {
+    fn other_error_converts_to_nephila_error() {
         let inner = std::io::Error::new(std::io::ErrorKind::Other, "boom");
         let err = ConnectorError::Other(Box::new(inner));
-        let me: MeridianError = err.into();
-        assert!(matches!(me, MeridianError::Connector(_)));
+        let me: NephilaError = err.into();
+        assert!(matches!(me, NephilaError::Connector(_)));
     }
 }

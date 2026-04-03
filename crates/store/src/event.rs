@@ -1,16 +1,16 @@
 use crate::SqliteStore;
 use crate::util::parse_rfc3339;
 use chrono::{DateTime, Utc};
-use meridian_core::event::{EventType, McpEvent};
-use meridian_core::id::AgentId;
-use meridian_core::store::McpEventLog;
+use nephila_core::event::{EventType, McpEvent};
+use nephila_core::id::AgentId;
+use nephila_core::store::McpEventLog;
 
 impl McpEventLog for SqliteStore {
-    async fn append(&self, event: McpEvent) -> meridian_core::Result<()> {
+    async fn append(&self, event: McpEvent) -> nephila_core::Result<()> {
         let event_type_str =
-            serde_json::to_string(&event.event_type).map_err(meridian_core::MeridianError::from)?;
+            serde_json::to_string(&event.event_type).map_err(nephila_core::NephilaError::from)?;
         let content_str =
-            serde_json::to_string(&event.content).map_err(meridian_core::MeridianError::from)?;
+            serde_json::to_string(&event.content).map_err(nephila_core::NephilaError::from)?;
         self.writer
             .execute(move |conn| {
                 conn.execute(
@@ -36,7 +36,7 @@ impl McpEventLog for SqliteStore {
         agent_id: AgentId,
         since: Option<DateTime<Utc>>,
         limit: usize,
-    ) -> meridian_core::Result<Vec<McpEvent>> {
+    ) -> nephila_core::Result<Vec<McpEvent>> {
         let events = self
             .writer
             .execute(move |conn| {
@@ -74,9 +74,9 @@ impl McpEventLog for SqliteStore {
         Ok(events)
     }
 
-    async fn get_tool_calls(&self, agent_id: AgentId) -> meridian_core::Result<Vec<McpEvent>> {
+    async fn get_tool_calls(&self, agent_id: AgentId) -> nephila_core::Result<Vec<McpEvent>> {
         let tool_call_type = serde_json::to_string(&EventType::ToolCall)
-            .map_err(meridian_core::MeridianError::from)?;
+            .map_err(nephila_core::NephilaError::from)?;
         let events = self
             .writer
             .execute(move |conn| {
@@ -122,9 +122,9 @@ fn row_to_event(row: &rusqlite::Row) -> Result<McpEvent, rusqlite::Error> {
 mod tests {
     use crate::test_util::make_agent_and_store;
     use chrono::Utc;
-    use meridian_core::event::{EventType, McpEvent};
-    use meridian_core::id::AgentId;
-    use meridian_core::store::McpEventLog;
+    use nephila_core::event::{EventType, McpEvent};
+    use nephila_core::id::AgentId;
+    use nephila_core::store::McpEventLog;
 
     fn make_event(agent_id: AgentId, event_type: EventType) -> McpEvent {
         McpEvent {

@@ -1,1 +1,1 @@
-pub use meridian_core::command::OrchestratorCommand as TuiCommand;
+pub use nephila_core::command::OrchestratorCommand as TuiCommand;

@@ -1,14 +1,14 @@
 use crate::SqliteStore;
 use crate::util::parse_rfc3339;
 use chrono::Utc;
-use meridian_core::agent::{Agent, AgentState, SpawnOrigin};
-use meridian_core::directive::Directive;
-use meridian_core::id::{AgentId, CheckpointId};
-use meridian_core::store::AgentStore;
+use nephila_core::agent::{Agent, AgentState, SpawnOrigin};
+use nephila_core::directive::Directive;
+use nephila_core::id::{AgentId, CheckpointId};
+use nephila_core::store::AgentStore;
 use std::path::PathBuf;
 
 impl AgentStore for SqliteStore {
-    async fn register(&self, agent: Agent) -> meridian_core::Result<()> {
+    async fn register(&self, agent: Agent) -> nephila_core::Result<()> {
         self.writer
             .execute(move |conn| {
                 let (origin_type, spawned_by, source_cp) = match &agent.origin {
@@ -46,7 +46,7 @@ impl AgentStore for SqliteStore {
         Ok(())
     }
 
-    async fn get(&self, id: AgentId) -> meridian_core::Result<Option<Agent>> {
+    async fn get(&self, id: AgentId) -> nephila_core::Result<Option<Agent>> {
         let record = self
             .writer
             .execute(move |conn| {
@@ -65,7 +65,7 @@ impl AgentStore for SqliteStore {
         Ok(record)
     }
 
-    async fn list(&self) -> meridian_core::Result<Vec<Agent>> {
+    async fn list(&self) -> nephila_core::Result<Vec<Agent>> {
         let records = self
             .writer
             .execute(|conn| {
@@ -82,7 +82,7 @@ impl AgentStore for SqliteStore {
         Ok(records)
     }
 
-    async fn save(&self, agent: &Agent) -> meridian_core::Result<()> {
+    async fn save(&self, agent: &Agent) -> nephila_core::Result<()> {
         let id = agent.id;
         let state = agent.state.to_string();
         let directive = agent.directive.to_string();
@@ -104,11 +104,11 @@ impl AgentStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::AgentNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::AgentNotFound(id))?;
         Ok(())
     }
 
-    async fn update_state(&self, id: AgentId, state: AgentState) -> meridian_core::Result<()> {
+    async fn update_state(&self, id: AgentId, state: AgentState) -> nephila_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
@@ -122,11 +122,11 @@ impl AgentStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::AgentNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::AgentNotFound(id))?;
         Ok(())
     }
 
-    async fn set_directive(&self, id: AgentId, directive: Directive) -> meridian_core::Result<()> {
+    async fn set_directive(&self, id: AgentId, directive: Directive) -> nephila_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
@@ -140,11 +140,11 @@ impl AgentStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::AgentNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::AgentNotFound(id))?;
         Ok(())
     }
 
-    async fn get_directive(&self, id: AgentId) -> meridian_core::Result<Directive> {
+    async fn get_directive(&self, id: AgentId) -> nephila_core::Result<Directive> {
         let directive = self
             .writer
             .execute(move |conn| {
@@ -162,14 +162,14 @@ impl AgentStore for SqliteStore {
                 }
             })
             .await?;
-        directive.ok_or(meridian_core::MeridianError::AgentNotFound(id))
+        directive.ok_or(nephila_core::NephilaError::AgentNotFound(id))
     }
 
     async fn set_injected_message(
         &self,
         id: AgentId,
         message: Option<String>,
-    ) -> meridian_core::Result<()> {
+    ) -> nephila_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
@@ -183,7 +183,7 @@ impl AgentStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::AgentNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::AgentNotFound(id))?;
         Ok(())
     }
 
@@ -191,7 +191,7 @@ impl AgentStore for SqliteStore {
         &self,
         id: AgentId,
         checkpoint_id: CheckpointId,
-    ) -> meridian_core::Result<()> {
+    ) -> nephila_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
@@ -205,7 +205,7 @@ impl AgentStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::AgentNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::AgentNotFound(id))?;
         Ok(())
     }
 
@@ -213,7 +213,7 @@ impl AgentStore for SqliteStore {
         &self,
         id: AgentId,
         checkpoint_id: Option<CheckpointId>,
-    ) -> meridian_core::Result<()> {
+    ) -> nephila_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
@@ -227,7 +227,7 @@ impl AgentStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::AgentNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::AgentNotFound(id))?;
         Ok(())
     }
 }
@@ -296,7 +296,7 @@ mod tests {
     fn make_agent() -> Agent {
         Agent::new(
             AgentId::new(),
-            meridian_core::ObjectiveId::new(),
+            nephila_core::ObjectiveId::new(),
             PathBuf::from("/tmp/test"),
             SpawnOrigin::Operator,
             None,
@@ -447,7 +447,7 @@ mod tests {
 
         let agent = Agent::new(
             AgentId::new(),
-            meridian_core::ObjectiveId::new(),
+            nephila_core::ObjectiveId::new(),
             PathBuf::from("/tmp/fork"),
             SpawnOrigin::Fork {
                 source_agent_id,
@@ -478,7 +478,7 @@ mod tests {
 
         let agent = Agent::new(
             AgentId::new(),
-            meridian_core::ObjectiveId::new(),
+            nephila_core::ObjectiveId::new(),
             PathBuf::from("/tmp/child"),
             SpawnOrigin::Agent(parent_id),
             None,
