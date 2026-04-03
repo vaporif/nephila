@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
-use meridian_core::event::BusEvent;
-use meridian_core::id::AgentId;
+use nephila_core::event::BusEvent;
+use nephila_core::id::AgentId;
 use ratatui::{DefaultTerminal, Frame};
 use tokio::sync::{broadcast, mpsc};
 
@@ -603,7 +603,7 @@ impl App {
                 .items
                 .iter()
                 .find(|i| i.data.id == aid)
-                .map(|i| i.data.state == meridian_core::agent::AgentState::Paused)
+                .map(|i| i.data.state == nephila_core::agent::AgentState::Paused)
                 .unwrap_or(false);
 
             let cmd = if is_paused {
@@ -648,7 +648,7 @@ impl App {
                 let selected = self.agent_tree.selected().map(|item| {
                     (
                         item.data.id,
-                        item.data.state == meridian_core::agent::AgentState::Paused,
+                        item.data.state == nephila_core::agent::AgentState::Paused,
                     )
                 });
                 if let Some((aid, is_paused)) = selected {

@@ -47,4 +47,4 @@ lint-actions:
     actionlint
 
 run *args:
-    cargo run -p meridian -- {{args}}
+    cargo run -p nephila -- {{args}}

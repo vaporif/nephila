@@ -1,4 +1,4 @@
-# Spec: LangGraph-Inspired Patterns for Meridian
+# Spec: LangGraph-Inspired Patterns for Nephila
 
 **Date:** 2026-03-31
 **Status:** Draft
@@ -9,13 +9,13 @@
 
 ## Overview
 
-Six patterns from LangGraph adapted to Meridian's Rust/MCP/process-level architecture. Ordered by implementation priority. Each pattern specifies what changes in core types, store traits, MCP tools, orchestrator logic, and TUI.
+Six patterns from LangGraph adapted to Nephila's Rust/MCP/process-level architecture. Ordered by implementation priority. Each pattern specifies what changes in core types, store traits, MCP tools, orchestrator logic, and TUI.
 
 ---
 
 ## 1. Conditional Routing
 
-**Problem:** Meridian's objective tree is a static hierarchy. When an agent completes an objective, the orchestrator has no way to dynamically choose what runs next based on results.
+**Problem:** Nephila's objective tree is a static hierarchy. When an agent completes an objective, the orchestrator has no way to dynamically choose what runs next based on results.
 
 **LangGraph equivalent:** `add_conditional_edges(source, path_fn, path_map)`
 
@@ -535,7 +535,7 @@ read_shared_state("findings")
 
 ## 6. External Streaming API
 
-**Problem:** Meridian's event bus is internal only (`broadcast::Sender<BusEvent>`). No way for external consumers (web UI, CI pipelines, monitoring) to observe agent activity.
+**Problem:** Nephila's event bus is internal only (`broadcast::Sender<BusEvent>`). No way for external consumers (web UI, CI pipelines, monitoring) to observe agent activity.
 
 **LangGraph equivalent:** `stream_mode=["updates", "values", "messages", "custom"]`
 

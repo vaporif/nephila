@@ -1,7 +1,7 @@
 use crate::directive::Directive;
 use crate::id::{AgentId, CheckpointId, ObjectiveId};
 use chrono::{DateTime, Utc};
-use meridian_eventsourcing::aggregate::EventSourced;
+use nephila_eventsourcing::aggregate::EventSourced;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 

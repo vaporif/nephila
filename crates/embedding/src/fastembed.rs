@@ -1,7 +1,7 @@
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::memory::Embedding;
-use meridian_core::{MeridianError, Result};
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::memory::Embedding;
+use nephila_core::{NephilaError, Result};
 use std::sync::{Arc, Mutex};
 
 pub struct FastEmbedder {
@@ -12,14 +12,14 @@ pub struct FastEmbedder {
 impl FastEmbedder {
     pub fn new(model_name: &str) -> Result<Self> {
         let embedding_model: EmbeddingModel =
-            model_name.parse().map_err(MeridianError::Embedding)?;
+            model_name.parse().map_err(NephilaError::Embedding)?;
 
         let model_info = TextEmbedding::get_model_info(&embedding_model)
-            .map_err(|e| MeridianError::Embedding(e.to_string()))?;
+            .map_err(|e| NephilaError::Embedding(e.to_string()))?;
         let dimension = model_info.dim;
 
         let model = TextEmbedding::try_new(InitOptions::new(embedding_model))
-            .map_err(|e| MeridianError::Embedding(e.to_string()))?;
+            .map_err(|e| NephilaError::Embedding(e.to_string()))?;
 
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
@@ -40,14 +40,14 @@ impl EmbeddingProvider for FastEmbedder {
             let mut model = model.lock().expect("embedding mutex poisoned");
             model
                 .embed(vec![text], None)
-                .map_err(|e| MeridianError::Embedding(e.to_string()))
+                .map_err(|e| NephilaError::Embedding(e.to_string()))
         })
         .await
-        .map_err(|e| MeridianError::Embedding(e.to_string()))??;
+        .map_err(|e| NephilaError::Embedding(e.to_string()))??;
 
         results
             .pop()
-            .ok_or_else(|| MeridianError::Embedding("empty embedding result".into()))
+            .ok_or_else(|| NephilaError::Embedding("empty embedding result".into()))
     }
 
     async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>> {
@@ -57,10 +57,10 @@ impl EmbeddingProvider for FastEmbedder {
             let mut model = model.lock().expect("embedding mutex poisoned");
             model
                 .embed(texts, None)
-                .map_err(|e| MeridianError::Embedding(e.to_string()))
+                .map_err(|e| NephilaError::Embedding(e.to_string()))
         })
         .await
-        .map_err(|e| MeridianError::Embedding(e.to_string()))?
+        .map_err(|e| NephilaError::Embedding(e.to_string()))?
     }
 
     fn dimension(&self) -> usize {
@@ -71,7 +71,7 @@ impl EmbeddingProvider for FastEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meridian_core::embedding::EmbeddingProvider;
+    use nephila_core::embedding::EmbeddingProvider;
 
     #[test]
     fn test_dimension() {

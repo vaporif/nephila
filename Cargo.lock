@@ -2094,145 +2094,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "meridian"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "color-eyre",
- "meridian-connector",
- "meridian-core",
- "meridian-embedding",
- "meridian-lifecycle",
- "meridian-mcp",
- "meridian-store",
- "meridian-tui",
- "ratatui",
- "serde",
- "tokio",
- "tokio-util",
- "toml",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "meridian-connector"
-version = "0.1.0"
-dependencies = [
- "meridian-core",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "meridian-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "meridian-eventsourcing",
- "rusqlite",
- "serde",
- "serde_json",
- "strum 0.28.0",
- "thiserror 2.0.18",
- "tokio",
- "toml",
- "uuid",
-]
-
-[[package]]
-name = "meridian-embedding"
-version = "0.1.0"
-dependencies = [
- "fastembed",
- "meridian-core",
- "ort",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "meridian-eventsourcing"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "meridian-lifecycle"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "meridian-core",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "meridian-mcp"
-version = "0.1.0"
-dependencies = [
- "axum",
- "chrono",
- "meridian-core",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "meridian-store"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "meridian-core",
- "meridian-eventsourcing",
- "rusqlite",
- "serde",
- "serde_json",
- "sqlite-vec",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "meridian-tui"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "crossterm",
- "meridian-core",
- "ratatui",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2328,6 +2189,145 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "rawpointer",
+]
+
+[[package]]
+name = "nephila"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "color-eyre",
+ "nephila-connector",
+ "nephila-core",
+ "nephila-embedding",
+ "nephila-lifecycle",
+ "nephila-mcp",
+ "nephila-store",
+ "nephila-tui",
+ "ratatui",
+ "serde",
+ "tokio",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "nephila-connector"
+version = "0.1.0"
+dependencies = [
+ "nephila-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nephila-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nephila-eventsourcing",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "strum 0.28.0",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml",
+ "uuid",
+]
+
+[[package]]
+name = "nephila-embedding"
+version = "0.1.0"
+dependencies = [
+ "fastembed",
+ "nephila-core",
+ "ort",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nephila-eventsourcing"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "nephila-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nephila-core",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "nephila-mcp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "nephila-core",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "nephila-store"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "nephila-core",
+ "nephila-eventsourcing",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sqlite-vec",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "nephila-tui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crossterm",
+ "nephila-core",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use meridian_core::config::SupervisionConfig;
+use nephila_core::config::SupervisionConfig;
 
 pub struct RestartTracker {
     config: SupervisionConfig,

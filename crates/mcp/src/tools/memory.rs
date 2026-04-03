@@ -5,11 +5,11 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::id::EntryId;
-use meridian_core::memory::{LifecycleState, Link, MemoryEntry};
-use meridian_core::store::{
+use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::id::EntryId;
+use nephila_core::memory::{LifecycleState, Link, MemoryEntry};
+use nephila_core::store::{
     AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
@@ -55,7 +55,7 @@ impl ToolBase for SearchGraphTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for SearchGraphTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for SearchGraphTool
 where
     S: AgentStore
         + CheckpointStore
@@ -69,7 +69,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let embedding = service
@@ -82,7 +82,7 @@ where
             .store
             .search(&embedding, params.limit)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         let mut results = Vec::with_capacity(search_results.len());
         for sr in search_results {
@@ -141,7 +141,7 @@ impl ToolBase for StoreMemoryTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for StoreMemoryTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for StoreMemoryTool
 where
     S: AgentStore
         + CheckpointStore
@@ -155,7 +155,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
@@ -178,13 +178,13 @@ where
             created_at: chrono::Utc::now(),
         };
 
-        let entry_id = service.store.store(entry).await.map_err(meridian_err)?;
+        let entry_id = service.store.store(entry).await.map_err(nephila_err)?;
 
         let similar = service
             .store
             .find_similar(&embedding, 0.8)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
         let links: Vec<Link> = similar
             .into_iter()
             .filter(|(id, _)| *id != entry_id)
@@ -198,7 +198,7 @@ where
                 .store
                 .update_links(entry_id, links)
                 .await
-                .map_err(meridian_err)?;
+                .map_err(nephila_err)?;
         }
 
         Ok(StoreMemoryOutput {

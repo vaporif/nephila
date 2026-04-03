@@ -1,7 +1,7 @@
 # Rig (rig-core) Evaluation
 
 **Date:** 2026-04-03
-**Verdict:** Not adopting. No meaningful value for Meridian.
+**Verdict:** Not adopting. No meaningful value for Nephila.
 
 ---
 
@@ -28,36 +28,36 @@ Rig is a Rust library for building LLM-powered applications. It provides a unifi
 | `Embed` derive macro | Auto-derive which struct fields to embed |
 | WASM | Core library compiles to wasm32-unknown-unknown |
 
-## Why It Doesn't Fit Meridian
+## Why It Doesn't Fit Nephila
 
 ### Overlap is only on the easy parts
 
-Meridian's `MessageConnector` trait is a single method: `send(messages, tools, config) -> Response`. Implementing that for Anthropic and OpenAI is ~100-200 lines each with reqwest. Rig would replace these stubs but brings a large dependency for trivial work.
+Nephila's `MessageConnector` trait is a single method: `send(messages, tools, config) -> Response`. Implementing that for Anthropic and OpenAI is ~100-200 lines each with reqwest. Rig would replace these stubs but brings a large dependency for trivial work.
 
 ### Abstraction conflict
 
-Rig has its own `Agent` type, pipeline model, and vector store abstraction. These fight with Meridian's `Agent` state machine, `Store` traits, and FastEmbed ONNX embeddings. Adopting rig means either using a fraction of it (wasteful) or conforming to its opinions (counterproductive).
+Rig has its own `Agent` type, pipeline model, and vector store abstraction. These fight with Nephila's `Agent` state machine, `Store` traits, and FastEmbed ONNX embeddings. Adopting rig means either using a fraction of it (wasteful) or conforming to its opinions (counterproductive).
 
 ### TaskConnector has no rig equivalent
 
-Meridian's `TaskConnector` trait manages agent process spawning and lifecycle (spawn, status, kill, wait). This is Meridian-specific. Rig doesn't do process management.
+Nephila's `TaskConnector` trait manages agent process spawning and lifecycle (spawn, status, kill, wait). This is Nephila-specific. Rig doesn't do process management.
 
 ### Token counting control
 
-Meridian needs precise token usage tracking for checkpoint thresholds (60%/75%/85%). Wrapping rig's responses to extract this adds a leaky abstraction.
+Nephila needs precise token usage tracking for checkpoint thresholds (60%/75%/85%). Wrapping rig's responses to extract this adds a leaky abstraction.
 
 ### rig-fastembed duplicates existing work
 
-Meridian's `embedding` crate already wraps fastembed-rs with its own `EmbeddingProvider` trait. `rig-fastembed` does the same thing but for rig's trait hierarchy.
+Nephila's `embedding` crate already wraps fastembed-rs with its own `EmbeddingProvider` trait. `rig-fastembed` does the same thing but for rig's trait hierarchy.
 
 ### rig-qdrant is irrelevant
 
-A thin glue layer between rig's `EmbeddingModel` and Qdrant's client. Meridian uses sqlite-vec for vector search and has no Qdrant dependency.
+A thin glue layer between rig's `EmbeddingModel` and Qdrant's client. Nephila uses sqlite-vec for vector search and has no Qdrant dependency.
 
 ## One Possible Future Use
 
-If Meridian ever needs to support a long tail of LLM providers (Ollama, Groq, Mistral, etc.) without writing individual connectors, rig's provider layer could be wrapped behind `MessageConnector` as one more `MessageConnectorKind` variant. This is a "nice to have later" — not an MVP concern.
+If Nephila ever needs to support a long tail of LLM providers (Ollama, Groq, Mistral, etc.) without writing individual connectors, rig's provider layer could be wrapped behind `MessageConnector` as one more `MessageConnectorKind` variant. This is a "nice to have later" — not an MVP concern.
 
 ## Conclusion
 
-Rig solves the easy part (API call plumbing) and ignores the hard part (orchestration lifecycle). For Meridian's current stage, writing the two stub connectors directly is simpler and gives more control. Nothing worth pulling in as a dependency or porting.
+Rig solves the easy part (API call plumbing) and ignores the hard part (orchestration lifecycle). For Nephila's current stage, writing the two stub connectors directly is simpler and gives more control. Nothing worth pulling in as a dependency or porting.

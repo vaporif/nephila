@@ -1,5 +1,5 @@
 [package]
-name = "meridian"
+name = "nephila"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,13 +11,13 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-meridian-core = { workspace = true }
-meridian-store = { workspace = true }
-meridian-embedding = { workspace = true }
-meridian-lifecycle = { workspace = true }
-meridian-connector = { workspace = true }
-meridian-mcp = { workspace = true }
-meridian-tui = { workspace = true }
+nephila-core = { workspace = true }
+nephila-store = { workspace = true }
+nephila-embedding = { workspace = true }
+nephila-lifecycle = { workspace = true }
+nephila-connector = { workspace = true }
+nephila-mcp = { workspace = true }
+nephila-tui = { workspace = true }
 tokio = { workspace = true }
 toml = { workspace = true }
 clap = { workspace = true }

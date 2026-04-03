@@ -6,13 +6,13 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
-use meridian_core::channel::{merge_channels, validate_channels};
-use meridian_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk};
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::event::BusEvent;
-use meridian_core::id::CheckpointId;
-use meridian_core::store::{
+use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
+use nephila_core::channel::{merge_channels, validate_channels};
+use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk};
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::event::BusEvent;
+use nephila_core::id::CheckpointId;
+use nephila_core::store::{
     AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
@@ -45,7 +45,7 @@ impl ToolBase for GetSessionCheckpointTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for GetSessionCheckpointTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for GetSessionCheckpointTool
 where
     S: AgentStore
         + CheckpointStore
@@ -59,7 +59,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
@@ -67,13 +67,13 @@ where
         // Check if agent has a restore_checkpoint_id set (for forks or explicit restore)
         let agent = AgentStore::get(service.store.as_ref(), agent_id)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         let checkpoint_id = match agent.and_then(|a| a.restore_checkpoint_id) {
             Some(id) => Some(id),
             None => CheckpointStore::get_latest(service.store.as_ref(), agent_id)
                 .await
-                .map_err(meridian_err)?
+                .map_err(nephila_err)?
                 .map(|n| n.id),
         };
 
@@ -90,7 +90,7 @@ where
 
         let ancestry = CheckpointStore::get_ancestry(service.store.as_ref(), checkpoint_id)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         if ancestry.is_empty() {
             return Ok(GetSessionCheckpointOutput {
@@ -109,7 +109,7 @@ where
             if last.interrupt.is_some() {
                 let pending = InterruptStore::get_pending(service.store.as_ref(), agent_id)
                     .await
-                    .map_err(meridian_err)?;
+                    .map_err(nephila_err)?;
                 pending.map(|req| {
                     serde_json::json!({
                         "type": req.interrupt_type,
@@ -167,7 +167,7 @@ impl ToolBase for SerializeAndPersistTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for SerializeAndPersistTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for SerializeAndPersistTool
 where
     S: AgentStore
         + CheckpointStore
@@ -181,7 +181,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
@@ -201,7 +201,7 @@ where
 
         let parent_id = CheckpointStore::get_latest(service.store.as_ref(), agent_id)
             .await
-            .map_err(meridian_err)?
+            .map_err(nephila_err)?
             .map(|n| n.id);
 
         let node = CheckpointNode {
@@ -228,23 +228,23 @@ where
         let checkpoint_id = node.id;
         CheckpointStore::save(service.store.as_ref(), &node, &l2_chunks, &l2_embeddings)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         AgentStore::set_checkpoint_id(service.store.as_ref(), agent_id, checkpoint_id)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         // Clear restore_checkpoint_id if it was set
         let agent = AgentStore::get(service.store.as_ref(), agent_id)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
         if agent
             .map(|a| a.restore_checkpoint_id.is_some())
             .unwrap_or(false)
         {
             AgentStore::set_restore_checkpoint(service.store.as_ref(), agent_id, None)
                 .await
-                .map_err(meridian_err)?;
+                .map_err(nephila_err)?;
         }
 
         let _ = service.event_tx.send(BusEvent::CheckpointSaved {

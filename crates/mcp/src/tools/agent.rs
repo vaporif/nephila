@@ -7,16 +7,16 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use meridian_core::command::OrchestratorCommand;
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::event::BusEvent;
-use meridian_core::id::ObjectiveId;
-use meridian_core::objective::NewObjective;
-use meridian_core::store::{
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::event::BusEvent;
+use nephila_core::id::ObjectiveId;
+use nephila_core::objective::NewObjective;
+use nephila_core::store::{
     AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
-use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
+use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
 
 // ── spawn_agent ──
 
@@ -54,13 +54,13 @@ impl ToolBase for SpawnAgentTool {
 
     fn description() -> Option<Cow<'static, str>> {
         Some(
-            "Request Meridian to spawn a child agent with a given objective and working directory."
+            "Request Nephila to spawn a child agent with a given objective and working directory."
                 .into(),
         )
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for SpawnAgentTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for SpawnAgentTool
 where
     S: AgentStore
         + CheckpointStore
@@ -74,7 +74,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let spawned_by = parse_agent_id(&params.requesting_agent_id)?;
@@ -97,7 +97,7 @@ where
                 description: params.objective.clone(),
             })
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         let dir = PathBuf::from(&params.directory);
 
@@ -197,7 +197,7 @@ impl ToolBase for GetAgentStatusTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for GetAgentStatusTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for GetAgentStatusTool
 where
     S: AgentStore
         + CheckpointStore
@@ -211,14 +211,14 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
 
         let agent = AgentStore::get(service.store.as_ref(), agent_id)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         match agent {
             Some(a) => Ok(GetAgentStatusOutput {
@@ -293,7 +293,7 @@ impl ToolBase for GetEventLogTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for GetEventLogTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for GetEventLogTool
 where
     S: AgentStore
         + CheckpointStore
@@ -307,7 +307,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
@@ -316,7 +316,7 @@ where
             .store
             .get_events(agent_id, None, params.limit)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         let count = events.len();
         let events_json = serde_json::to_string(&events)

@@ -5,12 +5,12 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
-use meridian_core::agent::{Agent, SpawnOrigin};
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::id::{AgentId, CheckpointId};
-use meridian_core::objective::{NewObjective, ObjectiveStatus};
-use meridian_core::store::{
+use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
+use nephila_core::agent::{Agent, SpawnOrigin};
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::id::{AgentId, CheckpointId};
+use nephila_core::objective::{NewObjective, ObjectiveStatus};
+use nephila_core::store::{
     AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
@@ -48,7 +48,7 @@ impl ToolBase for ForkAgentTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for ForkAgentTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for ForkAgentTool
 where
     S: AgentStore
         + CheckpointStore
@@ -62,7 +62,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let source_agent_id = parse_agent_id(&params.agent_id)?;
@@ -77,7 +77,7 @@ where
         // Verify source checkpoint exists
         let _checkpoint = CheckpointStore::get(service.store.as_ref(), source_checkpoint_id)
             .await
-            .map_err(meridian_err)?
+            .map_err(nephila_err)?
             .ok_or_else(|| {
                 ErrorData::invalid_params("source checkpoint not found".to_string(), None)
             })?;
@@ -85,7 +85,7 @@ where
         // Get source agent for objective and directory
         let source_agent = AgentStore::get(service.store.as_ref(), source_agent_id)
             .await
-            .map_err(meridian_err)?
+            .map_err(nephila_err)?
             .ok_or_else(|| ErrorData::invalid_params("source agent not found".to_string(), None))?;
 
         // Create sub-objective
@@ -98,7 +98,7 @@ where
             },
         )
         .await
-        .map_err(meridian_err)?;
+        .map_err(nephila_err)?;
 
         ObjectiveStore::update_status(
             service.store.as_ref(),
@@ -106,7 +106,7 @@ where
             ObjectiveStatus::InProgress,
         )
         .await
-        .map_err(meridian_err)?;
+        .map_err(nephila_err)?;
 
         // Create new agent with fork origin
         let new_agent_id = AgentId::new();
@@ -124,16 +124,16 @@ where
 
         AgentStore::register(service.store.as_ref(), new_agent)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         ObjectiveStore::assign_agent(service.store.as_ref(), sub_obj_id, new_agent_id)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         // Send spawn command
         let _ = service
             .cmd_tx
-            .send(meridian_core::command::OrchestratorCommand::Spawn {
+            .send(nephila_core::command::OrchestratorCommand::Spawn {
                 objective_id: sub_obj_id,
                 content: format!("Fork: {}", params.branch_label),
                 dir: source_agent.directory,

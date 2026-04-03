@@ -1,4 +1,4 @@
-use meridian_core::id::AgentId;
+use nephila_core::id::AgentId;
 
 use crate::config::{RequestConfig, SpawnConfig};
 use crate::error::ConnectorError;

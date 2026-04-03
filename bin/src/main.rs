@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use clap::Parser;
 use color_eyre::eyre::{Result, WrapErr};
-use meridian_core::command::OrchestratorCommand;
-use meridian_core::config::MeridianConfig;
-use meridian_core::event::BusEvent;
-use meridian_core::id::AgentId;
-use meridian_mcp::state::HitlRequest;
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::config::NephilaConfig;
+use nephila_core::event::BusEvent;
+use nephila_core::id::AgentId;
+use nephila_mcp::state::HitlRequest;
 use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
@@ -18,12 +18,12 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 #[derive(Parser)]
 #[command(
-    name = "meridian",
+    name = "nephila",
     about = "Agent orchestration with persistent context"
 )]
 struct Cli {
     /// Config file path
-    #[arg(short, long, default_value = "meridian.toml")]
+    #[arg(short, long, default_value = "nephila.toml")]
     config: PathBuf,
 
     /// Override SQLite database path
@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "meridian=debug".into());
+        .unwrap_or_else(|_| "nephila=debug".into());
 
     let tui_log = if cli.headless {
         tracing_subscriber::registry()
@@ -50,8 +50,8 @@ async fn main() -> Result<()> {
             .init();
         None
     } else {
-        let tui_log = meridian_tui::tui_tracing::TuiLogBuffer::new();
-        let tui_layer = meridian_tui::tui_tracing::TuiTracingLayer::new(tui_log.clone());
+        let tui_log = nephila_tui::tui_tracing::TuiLogBuffer::new();
+        let tui_layer = nephila_tui::tui_tracing::TuiTracingLayer::new(tui_log.clone());
         tracing_subscriber::registry()
             .with(env_filter)
             .with(tui_layer)
@@ -63,25 +63,25 @@ async fn main() -> Result<()> {
         tracing::warn!("Config file not found, using defaults");
         String::new()
     });
-    let mut config: MeridianConfig = if config_str.is_empty() {
-        MeridianConfig::default()
+    let mut config: NephilaConfig = if config_str.is_empty() {
+        NephilaConfig::default()
     } else {
         toml::from_str(&config_str).wrap_err("failed to parse config")?
     };
 
     if let Some(db) = cli.db {
-        config.meridian.sqlite_path = db;
+        config.nephila.sqlite_path = db;
     }
 
     let embedder = Arc::new(
-        meridian_embedding::FastEmbedder::new(&config.meridian.embedding_model)
+        nephila_embedding::FastEmbedder::new(&config.nephila.embedding_model)
             .wrap_err("failed to initialize embedding model")?,
     );
 
     let store = Arc::new(
-        meridian_store::SqliteStore::open(
-            &config.meridian.sqlite_path,
-            meridian_core::embedding::EmbeddingProvider::dimension(embedder.as_ref()),
+        nephila_store::SqliteStore::open(
+            &config.nephila.sqlite_path,
+            nephila_core::embedding::EmbeddingProvider::dimension(embedder.as_ref()),
         )
         .wrap_err("failed to open database")?,
     );
@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
 
     let cancellation_token = CancellationToken::new();
 
-    let (mcp_handle, bound_addr) = meridian_mcp::http::serve(
+    let (mcp_handle, bound_addr) = nephila_mcp::http::serve(
         store.clone(),
         embedder.clone(),
         event_tx.clone(),
@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
         let tui_log = tui_log.expect("tui_log must be Some in TUI mode");
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let mut terminal = ratatui::init();
-        let mut app = meridian_tui::App::new(
+        let mut app = nephila_tui::App::new(
             event_rx,
             cmd_tx,
             working_dir,

@@ -11,13 +11,13 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use tokio::sync::{RwLock, broadcast, mpsc};
 
-use meridian_core::command::OrchestratorCommand;
-use meridian_core::config::MeridianConfig;
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::error::MeridianError;
-use meridian_core::event::BusEvent;
-use meridian_core::id::AgentId;
-use meridian_core::store::{
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::config::NephilaConfig;
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::error::NephilaError;
+use nephila_core::event::BusEvent;
+use nephila_core::id::AgentId;
+use nephila_core::store::{
     AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
@@ -30,7 +30,7 @@ use crate::tools::lifecycle::{GetDirectiveTool, ReportTokenEstimateTool, Request
 use crate::tools::memory::{SearchGraphTool, StoreMemoryTool};
 use crate::tools::objective::{GetObjectiveTreeTool, UpdateObjectiveTool};
 
-pub fn meridian_err(e: MeridianError) -> rmcp::ErrorData {
+pub fn nephila_err(e: NephilaError) -> rmcp::ErrorData {
     ErrorData::internal_error(e.to_string(), None)
 }
 
@@ -40,23 +40,23 @@ pub fn parse_agent_id(s: &str) -> Result<AgentId, rmcp::ErrorData> {
         .map_err(|e| ErrorData::invalid_params(format!("invalid agent_id: {e}"), None))
 }
 
-pub fn parse_objective_id(s: &str) -> Result<meridian_core::id::ObjectiveId, rmcp::ErrorData> {
+pub fn parse_objective_id(s: &str) -> Result<nephila_core::id::ObjectiveId, rmcp::ErrorData> {
     s.parse::<uuid::Uuid>()
-        .map(meridian_core::id::ObjectiveId)
+        .map(nephila_core::id::ObjectiveId)
         .map_err(|e| ErrorData::invalid_params(format!("invalid objective_id: {e}"), None))
 }
 
-pub struct MeridianMcpServer<S, E> {
+pub struct NephilaMcpServer<S, E> {
     tool_router: ToolRouter<Self>,
     pub store: Arc<S>,
     pub embedder: Arc<E>,
     pub event_tx: broadcast::Sender<BusEvent>,
     pub cmd_tx: mpsc::Sender<OrchestratorCommand>,
     pub hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
-    pub config: MeridianConfig,
+    pub config: NephilaConfig,
 }
 
-impl<S, E> MeridianMcpServer<S, E>
+impl<S, E> NephilaMcpServer<S, E>
 where
     S: AgentStore
         + CheckpointStore
@@ -93,7 +93,7 @@ where
         event_tx: broadcast::Sender<BusEvent>,
         cmd_tx: mpsc::Sender<OrchestratorCommand>,
         hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
-        config: MeridianConfig,
+        config: NephilaConfig,
     ) -> Self {
         Self {
             tool_router: Self::build_tool_router(),
@@ -107,7 +107,7 @@ where
     }
 }
 
-impl<S, E> ServerHandler for MeridianMcpServer<S, E>
+impl<S, E> ServerHandler for NephilaMcpServer<S, E>
 where
     S: AgentStore
         + CheckpointStore
@@ -128,11 +128,11 @@ where
 
         ServerInfo::new(capabilities)
             .with_server_info(Implementation::new(
-                "meridian-mcp",
+                "nephila-mcp",
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "Meridian lifecycle-aware MCP server. Tools are filtered by agent phase.",
+                "Nephila lifecycle-aware MCP server. Tools are filtered by agent phase.",
             )
     }
 

@@ -8,12 +8,12 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use meridian_core::command::OrchestratorCommand;
-use meridian_core::config::MeridianConfig;
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::event::BusEvent;
-use meridian_core::id::AgentId;
-use meridian_core::store::{
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::config::NephilaConfig;
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::event::BusEvent;
+use nephila_core::id::AgentId;
+use nephila_core::store::{
     AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 use rmcp::transport::streamable_http_server::{
@@ -21,7 +21,7 @@ use rmcp::transport::streamable_http_server::{
     tower::{StreamableHttpServerConfig, StreamableHttpService},
 };
 
-use crate::server::MeridianMcpServer;
+use crate::server::NephilaMcpServer;
 use crate::state::HitlRequest;
 
 pub async fn serve<S, E>(
@@ -30,7 +30,7 @@ pub async fn serve<S, E>(
     event_tx: broadcast::Sender<BusEvent>,
     cmd_tx: mpsc::Sender<OrchestratorCommand>,
     hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
-    config: MeridianConfig,
+    config: NephilaConfig,
     cancellation_token: CancellationToken,
 ) -> std::io::Result<(JoinHandle<()>, SocketAddr)>
 where
@@ -59,7 +59,7 @@ where
 
     let service = StreamableHttpService::new(
         move || {
-            Ok(MeridianMcpServer::new(
+            Ok(NephilaMcpServer::new(
                 store.clone(),
                 embedder.clone(),
                 event_tx.clone(),

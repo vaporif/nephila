@@ -1,5 +1,5 @@
 [package]
-name = "meridian-lifecycle"
+name = "nephila-lifecycle"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,7 +11,7 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-meridian-core = { workspace = true }
+nephila-core = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }

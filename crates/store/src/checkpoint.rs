@@ -1,12 +1,12 @@
 use crate::SqliteStore;
 use crate::util::{f32_slice_to_bytes, parse_rfc3339};
 use chrono::Utc;
-use meridian_core::checkpoint::{
+use nephila_core::checkpoint::{
     ChannelEntry, CheckpointNode, InterruptSnapshot, L2Chunk, L2SearchResult,
 };
-use meridian_core::id::{AgentId, CheckpointId, EntryId};
-use meridian_core::memory::Embedding;
-use meridian_core::store::CheckpointStore;
+use nephila_core::id::{AgentId, CheckpointId, EntryId};
+use nephila_core::memory::Embedding;
+use nephila_core::store::CheckpointStore;
 use std::collections::BTreeMap;
 
 impl CheckpointStore for SqliteStore {
@@ -15,20 +15,20 @@ impl CheckpointStore for SqliteStore {
         node: &CheckpointNode,
         l2_chunks: &[L2Chunk],
         l2_embeddings: &[Embedding],
-    ) -> meridian_core::Result<()> {
+    ) -> nephila_core::Result<()> {
         let id = node.id;
         let agent_id = node.agent_id;
         let parent_id = node.parent_id;
         let branch_label = node.branch_label.clone();
         let channels_json =
-            serde_json::to_string(&node.channels).map_err(meridian_core::MeridianError::from)?;
+            serde_json::to_string(&node.channels).map_err(nephila_core::NephilaError::from)?;
         let l2_namespace = node.l2_namespace.clone();
         let interrupt_json = node
             .interrupt
             .as_ref()
             .map(serde_json::to_string)
             .transpose()
-            .map_err(meridian_core::MeridianError::from)?;
+            .map_err(nephila_core::NephilaError::from)?;
         let created_at = node.created_at.to_rfc3339();
 
         let l2_data: Vec<(EntryId, String, String, String, Vec<u8>)> = l2_chunks
@@ -36,7 +36,7 @@ impl CheckpointStore for SqliteStore {
             .zip(l2_embeddings.iter())
             .map(|(chunk, emb)| {
                 let tags_json = serde_json::to_string(&chunk.tags)
-                    .map_err(meridian_core::MeridianError::from)?;
+                    .map_err(nephila_core::NephilaError::from)?;
                 let bytes = f32_slice_to_bytes(emb);
                 Ok((
                     chunk.id,
@@ -46,7 +46,7 @@ impl CheckpointStore for SqliteStore {
                     bytes,
                 ))
             })
-            .collect::<meridian_core::Result<Vec<_>>>()?;
+            .collect::<nephila_core::Result<Vec<_>>>()?;
 
         self.writer
             .execute(move |conn| {
@@ -88,12 +88,12 @@ impl CheckpointStore for SqliteStore {
         Ok(())
     }
 
-    async fn get(&self, id: CheckpointId) -> meridian_core::Result<Option<CheckpointNode>> {
+    async fn get(&self, id: CheckpointId) -> nephila_core::Result<Option<CheckpointNode>> {
         let node = self.writer.execute(move |conn| load_node(conn, id)).await?;
         Ok(node)
     }
 
-    async fn get_latest(&self, agent_id: AgentId) -> meridian_core::Result<Option<CheckpointNode>> {
+    async fn get_latest(&self, agent_id: AgentId) -> nephila_core::Result<Option<CheckpointNode>> {
         let node = self
             .writer
             .execute(move |conn| {
@@ -116,7 +116,7 @@ impl CheckpointStore for SqliteStore {
         Ok(node)
     }
 
-    async fn get_children(&self, id: CheckpointId) -> meridian_core::Result<Vec<CheckpointNode>> {
+    async fn get_children(&self, id: CheckpointId) -> nephila_core::Result<Vec<CheckpointNode>> {
         let nodes = self
             .writer
             .execute(move |conn| {
@@ -133,7 +133,7 @@ impl CheckpointStore for SqliteStore {
         Ok(nodes)
     }
 
-    async fn get_ancestry(&self, id: CheckpointId) -> meridian_core::Result<Vec<CheckpointNode>> {
+    async fn get_ancestry(&self, id: CheckpointId) -> nephila_core::Result<Vec<CheckpointNode>> {
         let nodes = self
             .writer
             .execute(move |conn| {
@@ -157,7 +157,7 @@ impl CheckpointStore for SqliteStore {
         Ok(nodes)
     }
 
-    async fn list_branches(&self, agent_id: AgentId) -> meridian_core::Result<Vec<CheckpointNode>> {
+    async fn list_branches(&self, agent_id: AgentId) -> nephila_core::Result<Vec<CheckpointNode>> {
         let nodes = self
             .writer
             .execute(move |conn| {
@@ -182,7 +182,7 @@ impl CheckpointStore for SqliteStore {
         namespace: Option<&str>,
         embedding: &[f32],
         limit: usize,
-    ) -> meridian_core::Result<Vec<L2SearchResult>> {
+    ) -> nephila_core::Result<Vec<L2SearchResult>> {
         let emb_bytes = f32_slice_to_bytes(embedding);
         let ns = namespace.map(|s| s.to_string());
         let results = self
@@ -252,7 +252,7 @@ impl CheckpointStore for SqliteStore {
         namespace: Option<&str>,
         embedding: &[f32],
         limit: usize,
-    ) -> meridian_core::Result<Vec<L2SearchResult>> {
+    ) -> nephila_core::Result<Vec<L2SearchResult>> {
         let emb_bytes = f32_slice_to_bytes(embedding);
         let ns = namespace.map(|s| s.to_string());
         let results = self
@@ -364,9 +364,9 @@ fn load_node(
 mod tests {
     use crate::SqliteStore;
     use chrono::Utc;
-    use meridian_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk, ReducerKind};
-    use meridian_core::id::{AgentId, CheckpointId, EntryId, ObjectiveId};
-    use meridian_core::store::CheckpointStore;
+    use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk, ReducerKind};
+    use nephila_core::id::{AgentId, CheckpointId, EntryId, ObjectiveId};
+    use nephila_core::store::CheckpointStore;
     use std::collections::BTreeMap;
 
     fn make_channels() -> BTreeMap<String, ChannelEntry> {

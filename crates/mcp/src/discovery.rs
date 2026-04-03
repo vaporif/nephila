@@ -1,4 +1,4 @@
-use meridian_core::agent::AgentPhase;
+use nephila_core::agent::AgentPhase;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolName {

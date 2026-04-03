@@ -1,6 +1,6 @@
 use crate::SqliteStore;
 use crate::util::f32_slice_to_bytes;
-use meridian_eventsourcing::search::{
+use nephila_eventsourcing::search::{
     SearchEntry, SearchError, SearchFilter, SearchMetadata, SearchProvider, VectorSearchResult,
 };
 

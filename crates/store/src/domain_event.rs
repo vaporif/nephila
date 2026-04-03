@@ -1,11 +1,11 @@
 use crate::SqliteStore;
 use crate::util::parse_rfc3339;
 use chrono::{DateTime, Utc};
-use meridian_eventsourcing::envelope::EventEnvelope;
-use meridian_eventsourcing::id::{EventId, TraceId};
-use meridian_eventsourcing::outcome::Outcome;
-use meridian_eventsourcing::snapshot::{ContextSnapshot, Snapshot};
-use meridian_eventsourcing::store::{DomainEventStore, EventStoreError};
+use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::id::{EventId, TraceId};
+use nephila_eventsourcing::outcome::Outcome;
+use nephila_eventsourcing::snapshot::{ContextSnapshot, Snapshot};
+use nephila_eventsourcing::store::{DomainEventStore, EventStoreError};
 use std::collections::HashMap;
 
 impl DomainEventStore for SqliteStore {
@@ -248,7 +248,7 @@ mod tests {
     use super::*;
     use crate::SqliteStore;
     use chrono::Utc;
-    use meridian_eventsourcing::id::EventId;
+    use nephila_eventsourcing::id::EventId;
 
     fn make_store() -> SqliteStore {
         SqliteStore::open_in_memory(384).unwrap()

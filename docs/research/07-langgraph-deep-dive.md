@@ -1,4 +1,4 @@
-# LangGraph Deep Dive: Architecture, Patterns & Relevance to Meridian
+# LangGraph Deep Dive: Architecture, Patterns & Relevance to Nephila
 
 **Date:** 2026-03-31
 **Source:** Local clone of `langgraph` repo (libs/langgraph, libs/prebuilt, libs/checkpoint)
@@ -9,7 +9,7 @@
 
 LangGraph is a Python framework for building stateful, long-running agent workflows. It uses a **graph-based execution model** inspired by Google's Pregel (bulk synchronous parallel) and Apache Beam. Nodes are functions, edges define control flow, and state flows through typed channels with reducer functions. It is fundamentally an **API-call orchestrator** — it calls LLMs via `BaseChatModel.invoke(messages)` and manages message lists, not processes.
 
-Meridian and LangGraph are complementary, not competing. LangGraph solves *workflow composition* (what runs when, how state flows between steps). Meridian solves *agent process lifecycle* (what happens when context fills up). LangGraph has no answer for context exhaustion; Meridian has no declarative workflow composition. Several LangGraph patterns are worth adapting into Meridian's Rust/MCP architecture.
+Nephila and LangGraph are complementary, not competing. LangGraph solves *workflow composition* (what runs when, how state flows between steps). Nephila solves *agent process lifecycle* (what happens when context fills up). LangGraph has no answer for context exhaustion; Nephila has no declarative workflow composition. Several LangGraph patterns are worth adapting into Nephila's Rust/MCP architecture.
 
 ---
 
@@ -29,7 +29,7 @@ Key characteristics:
 - **Framework manages state.** LangGraph maintains the message list, applies reducers, checkpoints between steps.
 - **Incompatible with Claude Code.** Claude Code is a long-running interactive process with its own tools (Read, Write, Bash, etc.) and context management. It doesn't fit `BaseChatModel.invoke()`.
 
-This is the fundamental architectural divide: LangGraph orchestrates API calls, Meridian orchestrates processes.
+This is the fundamental architectural divide: LangGraph orchestrates API calls, Nephila orchestrates processes.
 
 ---
 
@@ -53,7 +53,7 @@ graph.add_edge("tools", "agent")
 compiled = graph.compile(checkpointer=MemorySaver())
 ```
 
-**What matters for Meridian:** The graph is a DAG of named steps with conditional routing. This is workflow composition — something Meridian's objective tree currently lacks.
+**What matters for Nephila:** The graph is a DAG of named steps with conditional routing. This is workflow composition — something Nephila's objective tree currently lacks.
 
 ### 2. Channels (channels/)
 
@@ -73,7 +73,7 @@ Interface (`BaseChannel`):
 - `checkpoint() -> Checkpoint` — serialize for persistence
 - `from_checkpoint(checkpoint)` — restore from persistence
 
-**What matters for Meridian:** The reducer concept solves multi-agent state aggregation. When 3 agents produce findings, how do you merge them? Currently Meridian has no answer. Channels with reducers provide one.
+**What matters for Nephila:** The reducer concept solves multi-agent state aggregation. When 3 agents produce findings, how do you merge them? Currently Nephila has no answer. Channels with reducers provide one.
 
 ### 3. Send (types.py:574)
 
@@ -87,7 +87,7 @@ def continue_to_jokes(state: OverallState):
 # Results aggregated via reducer on the "jokes" channel
 ```
 
-**What matters for Meridian:** This is the fan-out primitive. Meridian has `spawn_agent` but no "spawn N agents for a list of items and aggregate when all complete" pattern.
+**What matters for Nephila:** This is the fan-out primitive. Nephila has `spawn_agent` but no "spawn N agents for a list of items and aggregate when all complete" pattern.
 
 ### 4. Command (types.py:653)
 
@@ -106,7 +106,7 @@ Also supports:
 - `resume=value` — resume from an interrupt
 - `graph=Command.PARENT` — send command to parent graph (subgraph communication)
 
-**What matters for Meridian:** Agents could return both state updates and routing decisions in a single MCP tool call, rather than having the orchestrator infer next steps.
+**What matters for Nephila:** Agents could return both state updates and routing decisions in a single MCP tool call, rather than having the orchestrator infer next steps.
 
 ### 5. Interrupt / interrupt() (types.py:446, 705)
 
@@ -121,7 +121,7 @@ def review_node(state):
 
 The key detail: the human can **modify state** before resuming, not just provide an answer.
 
-**What matters for Meridian:** Meridian's HITL (`request_human_input`) only supports Q&A. Allowing the operator to edit L0 state or objectives before resuming would be more powerful.
+**What matters for Nephila:** Nephila's HITL (`request_human_input`) only supports Q&A. Allowing the operator to edit L0 state or objectives before resuming would be more powerful.
 
 ### 6. RetryPolicy (types.py:404)
 
@@ -138,7 +138,7 @@ RetryPolicy(
 )
 ```
 
-**What matters for Meridian:** Meridian's supervisor tracks restarts globally. Per-objective retry with backoff would be more granular.
+**What matters for Nephila:** Nephila's supervisor tracks restarts globally. Per-objective retry with backoff would be more granular.
 
 ### 7. Pregel Execution Engine (pregel/)
 
@@ -150,7 +150,7 @@ The runtime that executes compiled graphs. Follows BSP (bulk synchronous paralle
 4. Checkpoint state
 5. Repeat until no more nodes triggered or END reached
 
-**What matters for Meridian:** Not directly applicable. Meridian's "nodes" are OS processes, not coroutines. But the checkpoint-after-every-step discipline is worth noting — Meridian checkpoints on token threshold, not on step boundaries.
+**What matters for Nephila:** Not directly applicable. Nephila's "nodes" are OS processes, not coroutines. But the checkpoint-after-every-step discipline is worth noting — Nephila checkpoints on token threshold, not on step boundaries.
 
 ### 8. Streaming (multiple modes)
 
@@ -163,7 +163,7 @@ for chunk in graph.stream(input, stream_mode="updates"):
     print(chunk)
 ```
 
-**What matters for Meridian:** Meridian has an internal event bus but no external streaming API. When web UI is added, these stream modes are a good reference.
+**What matters for Nephila:** Nephila has an internal event bus but no external streaming API. When web UI is added, these stream modes are a good reference.
 
 ---
 
@@ -203,7 +203,7 @@ One agent yields control to another by returning `Command(goto="other_agent")`.
 
 ## Comparison Matrix
 
-| Concern | LangGraph | Meridian |
+| Concern | LangGraph | Nephila |
 |---|---|---|
 | Language | Python | Rust |
 | LLM interaction | API calls (`model.invoke()`) | Process spawning (Claude CLI) |
@@ -221,16 +221,16 @@ One agent yields control to another by returning `Command(goto="other_agent")`.
 
 ---
 
-## Key Takeaways for Meridian
+## Key Takeaways for Nephila
 
 1. **Conditional routing** is the highest-value, lowest-effort steal. Transform the static objective tree into a dynamic graph where completion of one objective can conditionally trigger the next.
 
 2. **Reducer-based state aggregation** solves the multi-agent merge problem. Three agents producing findings need a merge strategy — channels with reducers provide it cleanly.
 
-3. **Send/fan-out** is the natural multi-agent primitive. "Spawn N agents for these items, gate parent on all completing" is a pattern Meridian should support natively.
+3. **Send/fan-out** is the natural multi-agent primitive. "Spawn N agents for these items, gate parent on all completing" is a pattern Nephila should support natively.
 
 4. **Interrupt with state modification** extends HITL beyond Q&A. Let the operator edit objectives, reassign agents, or modify L0 state before resuming.
 
 5. **RetryPolicy per objective** is a small but valuable addition to the existing supervisor.
 
-6. **Don't steal the execution engine.** Pregel/BSP is for in-process coroutine scheduling. Meridian's agents are OS processes — the orchestrator loop is the right model.
+6. **Don't steal the execution engine.** Pregel/BSP is for in-process coroutine scheduling. Nephila's agents are OS processes — the orchestrator loop is the right model.

@@ -1,6 +1,6 @@
-[meridian]
+[nephila]
 storage_backend = "sqlite"
-sqlite_path = "./meridian.db"
+sqlite_path = "./nephila.db"
 embedding_model = "BGESmallENV15"
 
 [connector]

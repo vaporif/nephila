@@ -1,4 +1,4 @@
-use meridian_core::id::AgentId;
+use nephila_core::id::AgentId;
 
 use crate::anthropic_api::AnthropicApiConnector;
 use crate::claude_code::ClaudeCodeConnector;

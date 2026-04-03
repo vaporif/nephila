@@ -1,9 +1,9 @@
-use meridian_core::checkpoint::{ChannelEntry, L2Chunk, ReducerKind};
-use meridian_core::error::Result;
-use meridian_core::event::{EventType, McpEvent};
-use meridian_core::id::EntryId;
-use meridian_core::objective::{ObjectiveNode, ObjectiveTree};
-use meridian_core::summarizer::Summarizer;
+use nephila_core::checkpoint::{ChannelEntry, L2Chunk, ReducerKind};
+use nephila_core::error::Result;
+use nephila_core::event::{EventType, McpEvent};
+use nephila_core::id::EntryId;
+use nephila_core::objective::{ObjectiveNode, ObjectiveTree};
+use nephila_core::summarizer::Summarizer;
 use std::collections::BTreeMap;
 
 /// Generates checkpoint channels from MCP logs without an LLM — used after crashes.
@@ -140,8 +140,8 @@ impl Summarizer for CrashSummarizer {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use meridian_core::id::{AgentId, ObjectiveId};
-    use meridian_core::objective::{ObjectiveNode, ObjectiveStatus, ObjectiveTree};
+    use nephila_core::id::{AgentId, ObjectiveId};
+    use nephila_core::objective::{ObjectiveNode, ObjectiveStatus, ObjectiveTree};
 
     fn make_event(event_type: EventType, tool: &str) -> McpEvent {
         McpEvent {

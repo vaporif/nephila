@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use meridian_core::id::AgentId;
+use nephila_core::id::AgentId;
 use tokio::process::Command;
 
 use crate::config::SpawnConfig;
@@ -20,7 +20,7 @@ impl ClaudeCodeConnector {
     fn mcp_config_json(mcp_endpoint: &str) -> String {
         let config = serde_json::json!({
             "mcpServers": {
-                "meridian": {
+                "nephila": {
                     "type": "streamable-http",
                     "url": mcp_endpoint
                 }
@@ -134,7 +134,7 @@ mod tests {
         let json = ClaudeCodeConnector::mcp_config_json("http://localhost:8080/mcp");
         assert!(json.contains("http://localhost:8080/mcp"));
         assert!(json.contains("streamable-http"));
-        assert!(json.contains("meridian"));
+        assert!(json.contains("nephila"));
     }
 
     #[test]
@@ -142,7 +142,7 @@ mod tests {
         let json = ClaudeCodeConnector::mcp_config_json("http://example.com/mcp");
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("valid json");
         assert!(
-            parsed["mcpServers"]["meridian"]["url"]
+            parsed["mcpServers"]["nephila"]["url"]
                 .as_str()
                 .expect("url string")
                 .contains("example.com")

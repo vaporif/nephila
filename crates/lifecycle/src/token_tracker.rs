@@ -1,4 +1,4 @@
-use meridian_core::config::LifecycleConfig;
+use nephila_core::config::LifecycleConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenBand {

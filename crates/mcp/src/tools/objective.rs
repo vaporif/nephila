@@ -5,11 +5,11 @@ use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{MeridianMcpServer, meridian_err, parse_objective_id};
-use meridian_core::embedding::EmbeddingProvider;
-use meridian_core::event::BusEvent;
-use meridian_core::objective::ObjectiveStatus;
-use meridian_core::store::{
+use crate::server::{NephilaMcpServer, nephila_err, parse_objective_id};
+use nephila_core::embedding::EmbeddingProvider;
+use nephila_core::event::BusEvent;
+use nephila_core::objective::ObjectiveStatus;
+use nephila_core::store::{
     AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
@@ -41,7 +41,7 @@ impl ToolBase for GetObjectiveTreeTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for GetObjectiveTreeTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for GetObjectiveTreeTool
 where
     S: AgentStore
         + CheckpointStore
@@ -55,7 +55,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let root_id = parse_objective_id(&params.root_id)?;
@@ -64,7 +64,7 @@ where
             .store
             .get_tree(root_id)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
         let tree_json = serde_json::to_string(&tree)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
@@ -101,7 +101,7 @@ impl ToolBase for UpdateObjectiveTool {
     }
 }
 
-impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for UpdateObjectiveTool
+impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for UpdateObjectiveTool
 where
     S: AgentStore
         + CheckpointStore
@@ -115,7 +115,7 @@ where
     E: EmbeddingProvider + 'static,
 {
     async fn invoke(
-        service: &MeridianMcpServer<S, E>,
+        service: &NephilaMcpServer<S, E>,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let objective_id = parse_objective_id(&params.objective_id)?;
@@ -134,7 +134,7 @@ where
             .store
             .update_status(objective_id, status)
             .await
-            .map_err(meridian_err)?;
+            .map_err(nephila_err)?;
 
         let _ = service.event_tx.send(BusEvent::ObjectiveUpdated {
             objective_id,

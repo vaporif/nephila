@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MeridianConfig {
-    pub meridian: CoreConfig,
+pub struct NephilaConfig {
+    pub nephila: CoreConfig,
     pub lifecycle: LifecycleConfig,
     pub supervision: SupervisionConfig,
     pub summarizer: SummarizerConfig,
@@ -140,7 +140,7 @@ fn default_storage_backend() -> String {
     "sqlite".into()
 }
 fn default_sqlite_path() -> PathBuf {
-    PathBuf::from("./meridian.db")
+    PathBuf::from("./nephila.db")
 }
 fn default_embedding_model() -> String {
     "BGESmallENV15".into()
@@ -215,10 +215,10 @@ fn default_max_hitl_rerequests() -> u32 {
     3
 }
 
-impl Default for MeridianConfig {
+impl Default for NephilaConfig {
     fn default() -> Self {
         toml::from_str(
-            "[meridian]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n[connector]\n[mcp]\n",
+            "[nephila]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n[connector]\n[mcp]\n",
         )
         .expect("default config must parse")
     }
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn test_deserialize_minimal_config() {
         let toml_str = r#"
-[meridian]
+[nephila]
 sqlite_path = "./test.db"
 
 [lifecycle]
@@ -244,7 +244,7 @@ sqlite_path = "./test.db"
 
 [tui]
 "#;
-        let config: MeridianConfig = toml::from_str(toml_str).unwrap();
+        let config: NephilaConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.lifecycle.context_threshold_pct, 80);
         assert_eq!(config.memory.novelty_threshold, 0.95);
     }
@@ -252,9 +252,9 @@ sqlite_path = "./test.db"
     #[test]
     fn test_deserialize_full_config() {
         let toml_str = r#"
-[meridian]
+[nephila]
 storage_backend = "sqlite"
-sqlite_path = "./meridian.db"
+sqlite_path = "./nephila.db"
 embedding_model = "text-embedding-3-small"
 
 [lifecycle]
@@ -287,8 +287,8 @@ max_hitl_rerequests = 3
 [connector]
 claude_binary = "claude"
 "#;
-        let config: MeridianConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.meridian.storage_backend, "sqlite");
+        let config: NephilaConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.nephila.storage_backend, "sqlite");
         assert_eq!(config.supervision.max_restarts, 5);
         assert_eq!(config.supervision.max_agent_depth, 3);
         assert_eq!(config.connector.claude_binary, "claude");
@@ -297,7 +297,7 @@ claude_binary = "claude"
     #[test]
     fn test_deserialize_config_with_connector() {
         let toml_str = r#"
-[meridian]
+[nephila]
 [lifecycle]
 [supervision]
 [summarizer]
@@ -307,20 +307,20 @@ claude_binary = "claude"
 claude_binary = "/usr/local/bin/claude"
 anthropic_api_key_env = "MY_KEY"
 "#;
-        let config: MeridianConfig = toml::from_str(toml_str).unwrap();
+        let config: NephilaConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.connector.claude_binary, "/usr/local/bin/claude");
         assert_eq!(config.connector.anthropic_api_key_env.unwrap(), "MY_KEY");
     }
 
     #[test]
     fn test_default_config_has_connector() {
-        let config = MeridianConfig::default();
+        let config = NephilaConfig::default();
         assert_eq!(config.connector.claude_binary, "claude");
     }
 
     #[test]
     fn test_mcp_config_defaults() {
-        let config = MeridianConfig::default();
+        let config = NephilaConfig::default();
         assert_eq!(config.mcp.host, "127.0.0.1");
         assert_eq!(config.mcp.port, 0);
     }
@@ -328,7 +328,7 @@ anthropic_api_key_env = "MY_KEY"
     #[test]
     fn test_mcp_config_explicit_port() {
         let toml_str = r#"
-[meridian]
+[nephila]
 [lifecycle]
 [supervision]
 [summarizer]
@@ -338,7 +338,7 @@ anthropic_api_key_env = "MY_KEY"
 host = "0.0.0.0"
 port = 8080
 "#;
-        let config: MeridianConfig = toml::from_str(toml_str).unwrap();
+        let config: NephilaConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.mcp.host, "0.0.0.0");
         assert_eq!(config.mcp.port, 8080);
     }

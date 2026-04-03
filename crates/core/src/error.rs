@@ -1,7 +1,7 @@
 use crate::id::{AgentId, EntryId, ObjectiveId};
 
 #[derive(Debug, thiserror::Error)]
-pub enum MeridianError {
+pub enum NephilaError {
     #[error("agent not found: {0}")]
     AgentNotFound(AgentId),
 
@@ -39,4 +39,4 @@ pub enum MeridianError {
     Shutdown,
 }
 
-pub type Result<T> = std::result::Result<T, MeridianError>;
+pub type Result<T> = std::result::Result<T, NephilaError>;
