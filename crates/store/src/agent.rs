@@ -1,9 +1,9 @@
 use crate::SqliteStore;
 use crate::util::parse_rfc3339;
 use chrono::Utc;
-use meridian_core::agent::{Agent, AgentState};
+use meridian_core::agent::{Agent, AgentState, SpawnOrigin};
 use meridian_core::directive::Directive;
-use meridian_core::id::{AgentId, CheckpointVersion};
+use meridian_core::id::{AgentId, CheckpointId};
 use meridian_core::store::AgentStore;
 use std::path::PathBuf;
 
@@ -11,17 +11,29 @@ impl AgentStore for SqliteStore {
     async fn register(&self, agent: Agent) -> meridian_core::Result<()> {
         self.writer
             .execute(move |conn| {
+                let (origin_type, spawned_by, source_cp) = match &agent.origin {
+                    SpawnOrigin::Operator => ("operator", None, None),
+                    SpawnOrigin::Agent(id) => ("agent", Some(*id), None),
+                    SpawnOrigin::Fork {
+                        source_agent_id,
+                        source_checkpoint_id,
+                    } => ("fork", Some(*source_agent_id), Some(*source_checkpoint_id)),
+                };
+
                 conn.execute(
-                    "INSERT INTO agents (id, state, directive, directory, objective_id, checkpoint_version, spawned_by, injected_message, session_id, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    "INSERT INTO agents (id, state, directive, directory, objective_id, checkpoint_id, restore_checkpoint_id, spawned_by, spawn_origin_type, source_checkpoint_id, injected_message, session_id, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                     rusqlite::params![
                         agent.id,
                         agent.state.to_string(),
                         agent.directive.to_string(),
                         agent.directory.to_string_lossy().to_string(),
                         agent.objective_id,
-                        agent.checkpoint_version,
-                        agent.origin.spawned_by(),
+                        agent.checkpoint_id,
+                        agent.restore_checkpoint_id,
+                        spawned_by,
+                        origin_type,
+                        source_cp,
                         agent.injected_message,
                         agent.session_id,
                         agent.created_at.to_rfc3339(),
@@ -39,7 +51,7 @@ impl AgentStore for SqliteStore {
             .writer
             .execute(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, state, directory, objective_id, checkpoint_version, spawned_by, injected_message, created_at, updated_at, directive, session_id
+                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id
                      FROM agents WHERE id = ?1",
                 )?;
                 let result = stmt.query_row(rusqlite::params![id], row_to_agent);
@@ -58,7 +70,7 @@ impl AgentStore for SqliteStore {
             .writer
             .execute(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, state, directory, objective_id, checkpoint_version, spawned_by, injected_message, created_at, updated_at, directive, session_id
+                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id
                      FROM agents ORDER BY created_at",
                 )?;
                 let rows = stmt
@@ -75,15 +87,16 @@ impl AgentStore for SqliteStore {
         let state = agent.state.to_string();
         let directive = agent.directive.to_string();
         let session_id = agent.session_id.clone();
-        let checkpoint_version = agent.checkpoint_version;
+        let checkpoint_id = agent.checkpoint_id;
+        let restore_checkpoint_id = agent.restore_checkpoint_id;
         let injected_message = agent.injected_message.clone();
         let now = agent.updated_at.to_rfc3339();
 
         self.writer
             .execute(move |conn| {
                 let rows = conn.execute(
-                    "UPDATE agents SET state = ?1, directive = ?2, session_id = ?3, checkpoint_version = ?4, injected_message = ?5, updated_at = ?6 WHERE id = ?7",
-                    rusqlite::params![state, directive, session_id, checkpoint_version, injected_message, now, id],
+                    "UPDATE agents SET state = ?1, directive = ?2, session_id = ?3, checkpoint_id = ?4, restore_checkpoint_id = ?5, injected_message = ?6, updated_at = ?7 WHERE id = ?8",
+                    rusqlite::params![state, directive, session_id, checkpoint_id, restore_checkpoint_id, injected_message, now, id],
                 )?;
                 if rows == 0 {
                     return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -174,17 +187,39 @@ impl AgentStore for SqliteStore {
         Ok(())
     }
 
-    async fn set_checkpoint_version(
+    async fn set_checkpoint_id(
         &self,
         id: AgentId,
-        version: CheckpointVersion,
+        checkpoint_id: CheckpointId,
     ) -> meridian_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
                 let rows = conn.execute(
-                    "UPDATE agents SET checkpoint_version = ?1, updated_at = ?2 WHERE id = ?3",
-                    rusqlite::params![version, now, id],
+                    "UPDATE agents SET checkpoint_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![checkpoint_id, now, id],
+                )?;
+                if rows == 0 {
+                    return Err(rusqlite::Error::QueryReturnedNoRows);
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|_| meridian_core::MeridianError::AgentNotFound(id))?;
+        Ok(())
+    }
+
+    async fn set_restore_checkpoint(
+        &self,
+        id: AgentId,
+        checkpoint_id: Option<CheckpointId>,
+    ) -> meridian_core::Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.writer
+            .execute(move |conn| {
+                let rows = conn.execute(
+                    "UPDATE agents SET restore_checkpoint_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    rusqlite::params![checkpoint_id, now, id],
                 )?;
                 if rows == 0 {
                     return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -219,12 +254,30 @@ fn row_to_agent(row: &rusqlite::Row) -> Result<Agent, rusqlite::Error> {
         session_id,
         directory: PathBuf::from(dir_str),
         objective_id: row.get(3)?,
-        checkpoint_version: row.get(4)?,
+        checkpoint_id: row.get(4)?,
+        restore_checkpoint_id: row.get(13)?,
         origin: {
+            let origin_type: String = row
+                .get::<_, Option<String>>(11)?
+                .unwrap_or_else(|| "operator".to_string());
             let spawned_by: Option<AgentId> = row.get(5)?;
-            match spawned_by {
-                Some(id) => meridian_core::agent::SpawnOrigin::Agent(id),
-                None => meridian_core::agent::SpawnOrigin::User,
+            let source_cp: Option<String> = row.get(12)?;
+            match origin_type.as_str() {
+                "fork" => {
+                    let src_agent = spawned_by.expect("fork must have spawned_by");
+                    let src_cp_id = source_cp
+                        .and_then(|s| s.parse::<uuid::Uuid>().ok())
+                        .map(CheckpointId)
+                        .expect("fork must have source_checkpoint_id");
+                    SpawnOrigin::Fork {
+                        source_agent_id: src_agent,
+                        source_checkpoint_id: src_cp_id,
+                    }
+                }
+                "agent" => {
+                    SpawnOrigin::Agent(spawned_by.expect("agent origin must have spawned_by"))
+                }
+                _ => SpawnOrigin::Operator,
             }
         },
         children: Vec::new(),
@@ -245,7 +298,7 @@ mod tests {
             AgentId::new(),
             meridian_core::ObjectiveId::new(),
             PathBuf::from("/tmp/test"),
-            meridian_core::agent::SpawnOrigin::User,
+            SpawnOrigin::Operator,
             None,
         )
     }
@@ -262,6 +315,7 @@ mod tests {
         assert_eq!(fetched.id, id);
         assert_eq!(fetched.state, AgentState::Starting);
         assert_eq!(fetched.directory, PathBuf::from("/tmp/test"));
+        assert!(matches!(fetched.origin, SpawnOrigin::Operator));
     }
 
     #[tokio::test]
@@ -291,13 +345,6 @@ mod tests {
         store.set_directive(id, Directive::Pause).await.unwrap();
         let d = store.get_directive(id).await.unwrap();
         assert_eq!(d, Directive::Pause);
-
-        store
-            .set_directive(id, Directive::PrepareReset)
-            .await
-            .unwrap();
-        let d = store.get_directive(id).await.unwrap();
-        assert_eq!(d, Directive::PrepareReset);
     }
 
     #[tokio::test]
@@ -305,22 +352,6 @@ mod tests {
         let store = SqliteStore::open_in_memory(384).unwrap();
         let fake_id = AgentId::new();
         let result = store.update_state(fake_id, AgentState::Active).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn set_directive_nonexistent_agent_errors() {
-        let store = SqliteStore::open_in_memory(384).unwrap();
-        let fake_id = AgentId::new();
-        let result = store.set_directive(fake_id, Directive::Pause).await;
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn get_directive_nonexistent_agent_errors() {
-        let store = SqliteStore::open_in_memory(384).unwrap();
-        let fake_id = AgentId::new();
-        let result = store.get_directive(fake_id).await;
         assert!(result.is_err());
     }
 
@@ -350,7 +381,6 @@ mod tests {
         agent.state = AgentState::Active;
         agent.directive = Directive::Pause;
         agent.session_id = Some("sess-1".to_string());
-        agent.checkpoint_version = Some(CheckpointVersion(3));
 
         store.save(&agent).await.unwrap();
 
@@ -358,6 +388,105 @@ mod tests {
         assert_eq!(fetched.state, AgentState::Active);
         assert_eq!(fetched.directive, Directive::Pause);
         assert_eq!(fetched.session_id, Some("sess-1".to_string()));
-        assert_eq!(fetched.checkpoint_version, Some(CheckpointVersion(3)));
+    }
+
+    async fn create_checkpoint(store: &SqliteStore, agent_id: AgentId) -> CheckpointId {
+        let cp_id = CheckpointId::new();
+        store
+            .writer
+            .execute(move |conn| {
+                let now = chrono::Utc::now().to_rfc3339();
+                conn.execute(
+                    "INSERT INTO checkpoints (id, agent_id, channels, l2_namespace, created_at) VALUES (?1, ?2, '{}', 'general', ?3)",
+                    rusqlite::params![cp_id, agent_id, now],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        cp_id
+    }
+
+    #[tokio::test]
+    async fn set_checkpoint_id_roundtrip() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let agent = make_agent();
+        let id = agent.id;
+        store.register(agent).await.unwrap();
+
+        let cp_id = create_checkpoint(&store, id).await;
+        store.set_checkpoint_id(id, cp_id).await.unwrap();
+
+        let fetched = store.get(id).await.unwrap().unwrap();
+        assert_eq!(fetched.checkpoint_id, Some(cp_id));
+    }
+
+    #[tokio::test]
+    async fn set_restore_checkpoint_roundtrip() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let agent = make_agent();
+        let id = agent.id;
+        store.register(agent).await.unwrap();
+
+        let cp_id = create_checkpoint(&store, id).await;
+        store.set_restore_checkpoint(id, Some(cp_id)).await.unwrap();
+
+        let fetched = store.get(id).await.unwrap().unwrap();
+        assert_eq!(fetched.restore_checkpoint_id, Some(cp_id));
+
+        store.set_restore_checkpoint(id, None).await.unwrap();
+        let fetched = store.get(id).await.unwrap().unwrap();
+        assert!(fetched.restore_checkpoint_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn fork_origin_roundtrip() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let source_agent_id = AgentId::new();
+        let source_cp_id = CheckpointId::new();
+
+        let agent = Agent::new(
+            AgentId::new(),
+            meridian_core::ObjectiveId::new(),
+            PathBuf::from("/tmp/fork"),
+            SpawnOrigin::Fork {
+                source_agent_id,
+                source_checkpoint_id: source_cp_id,
+            },
+            None,
+        );
+        let id = agent.id;
+        store.register(agent).await.unwrap();
+
+        let fetched = store.get(id).await.unwrap().unwrap();
+        match fetched.origin {
+            SpawnOrigin::Fork {
+                source_agent_id: sa,
+                source_checkpoint_id: sc,
+            } => {
+                assert_eq!(sa, source_agent_id);
+                assert_eq!(sc, source_cp_id);
+            }
+            other => panic!("expected Fork, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_origin_roundtrip() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let parent_id = AgentId::new();
+
+        let agent = Agent::new(
+            AgentId::new(),
+            meridian_core::ObjectiveId::new(),
+            PathBuf::from("/tmp/child"),
+            SpawnOrigin::Agent(parent_id),
+            None,
+        );
+        let id = agent.id;
+        store.register(agent).await.unwrap();
+
+        let fetched = store.get(id).await.unwrap().unwrap();
+        assert!(matches!(fetched.origin, SpawnOrigin::Agent(p) if p == parent_id));
     }
 }

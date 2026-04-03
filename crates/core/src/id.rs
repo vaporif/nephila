@@ -10,8 +10,11 @@ pub struct EntryId(pub uuid::Uuid);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ObjectiveId(pub uuid::Uuid);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct CheckpointVersion(pub u32);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CheckpointId(pub uuid::Uuid);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct InterruptId(pub uuid::Uuid);
 
 impl Default for AgentId {
     fn default() -> Self {
@@ -49,9 +52,27 @@ impl ObjectiveId {
     }
 }
 
-impl CheckpointVersion {
-    pub fn next(self) -> Self {
-        Self(self.0.checked_add(1).expect("checkpoint version overflow"))
+impl Default for CheckpointId {
+    fn default() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+}
+
+impl CheckpointId {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl Default for InterruptId {
+    fn default() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+}
+
+impl InterruptId {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -67,10 +88,37 @@ macro_rules! impl_uuid_id_display {
     )+};
 }
 
-impl_uuid_id_display!(AgentId, EntryId, ObjectiveId);
+impl_uuid_id_display!(AgentId, EntryId, ObjectiveId, CheckpointId, InterruptId);
 
-impl fmt::Display for CheckpointVersion {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "v{}", self.0)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_id_new_is_unique() {
+        let a = CheckpointId::new();
+        let b = CheckpointId::new();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn interrupt_id_new_is_unique() {
+        let a = InterruptId::new();
+        let b = InterruptId::new();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn checkpoint_id_display_shows_hex_prefix() {
+        let id = CheckpointId::new();
+        let s = format!("{id}");
+        assert_eq!(s.len(), 8);
+    }
+
+    #[test]
+    fn interrupt_id_display_shows_hex_prefix() {
+        let id = InterruptId::new();
+        let s = format!("{id}");
+        assert_eq!(s.len(), 8);
     }
 }

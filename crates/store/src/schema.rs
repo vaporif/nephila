@@ -8,8 +8,11 @@ CREATE TABLE IF NOT EXISTS agents (
     directive TEXT NOT NULL DEFAULT 'continue',
     directory TEXT NOT NULL,
     objective_id TEXT NOT NULL,
-    checkpoint_version INTEGER,
+    checkpoint_id TEXT REFERENCES checkpoints(id),
+    restore_checkpoint_id TEXT REFERENCES checkpoints(id),
     spawned_by TEXT,
+    spawn_origin_type TEXT NOT NULL DEFAULT 'operator',
+    source_checkpoint_id TEXT,
     injected_message TEXT,
     session_id TEXT,
     created_at TEXT NOT NULL,
@@ -27,15 +30,49 @@ CREATE TABLE IF NOT EXISTS objectives (
 );
 
 CREATE TABLE IF NOT EXISTS checkpoints (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     agent_id TEXT NOT NULL REFERENCES agents(id),
-    version INTEGER NOT NULL,
-    layer TEXT NOT NULL,
-    content TEXT NOT NULL,
-    embedding BLOB,
-    created_at TEXT NOT NULL,
-    UNIQUE(agent_id, version, layer)
+    parent_id TEXT REFERENCES checkpoints(id),
+    branch_label TEXT,
+    channels TEXT NOT NULL,
+    l2_namespace TEXT NOT NULL DEFAULT 'general',
+    interrupt TEXT,
+    created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_checkpoints_agent ON checkpoints(agent_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_parent ON checkpoints(parent_id);
+CREATE INDEX IF NOT EXISTS idx_checkpoints_created ON checkpoints(agent_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS l2_chunks (
+    id TEXT PRIMARY KEY,
+    checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id),
+    agent_id TEXT NOT NULL,
+    namespace TEXT NOT NULL DEFAULT 'general',
+    content TEXT NOT NULL,
+    tags TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_l2_namespace ON l2_chunks(agent_id, namespace);
+CREATE INDEX IF NOT EXISTS idx_l2_checkpoint ON l2_chunks(checkpoint_id);
+
+CREATE TABLE IF NOT EXISTS interrupt_requests (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id),
+    interrupt_type TEXT NOT NULL,
+    payload TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    response TEXT,
+    question_hash TEXT,
+    ask_count INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_interrupts_pending ON interrupt_requests(status) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS idx_interrupts_agent ON interrupt_requests(agent_id);
 
 CREATE TABLE IF NOT EXISTS memories (
     id TEXT PRIMARY KEY,
@@ -63,13 +100,6 @@ CREATE TABLE IF NOT EXISTS events (
     timestamp TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '{}',
     objective_id TEXT
-);
-
-CREATE TABLE IF NOT EXISTS hitl_tracking (
-    agent_id TEXT NOT NULL REFERENCES agents(id),
-    question_hash INTEGER NOT NULL,
-    ask_count INTEGER NOT NULL DEFAULT 1,
-    PRIMARY KEY (agent_id, question_hash)
 );
 
 CREATE TABLE IF NOT EXISTS domain_events (
@@ -124,7 +154,6 @@ CREATE TABLE IF NOT EXISTS search_entries (
     metadata TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_checkpoints_agent_version ON checkpoints(agent_id, version DESC);
 CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id);
 CREATE INDEX IF NOT EXISTS idx_memories_lifecycle ON memories(lifecycle_state);
 CREATE INDEX IF NOT EXISTS idx_events_agent_timestamp ON events(agent_id, timestamp DESC);
@@ -156,7 +185,8 @@ pub fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
 pub fn init_vec_tables(conn: &Connection, dimension: usize) -> Result<(), rusqlite::Error> {
     conn.execute_batch(&format!(
         "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{dimension}]);
-         CREATE VIRTUAL TABLE IF NOT EXISTS vec_search_entries USING vec0(embedding float[{dimension}]);"
+         CREATE VIRTUAL TABLE IF NOT EXISTS vec_search_entries USING vec0(embedding float[{dimension}]);
+         CREATE VIRTUAL TABLE IF NOT EXISTS vec_l2_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{dimension}]);"
     ))?;
     Ok(())
 }
@@ -181,10 +211,11 @@ mod tests {
         assert!(tables.contains(&"agents".to_string()));
         assert!(tables.contains(&"objectives".to_string()));
         assert!(tables.contains(&"checkpoints".to_string()));
+        assert!(tables.contains(&"l2_chunks".to_string()));
+        assert!(tables.contains(&"interrupt_requests".to_string()));
         assert!(tables.contains(&"memories".to_string()));
         assert!(tables.contains(&"memory_links".to_string()));
         assert!(tables.contains(&"events".to_string()));
-        assert!(tables.contains(&"hitl_tracking".to_string()));
         assert!(tables.contains(&"search_entries".to_string()));
         assert!(tables.contains(&"domain_events".to_string()));
         assert!(tables.contains(&"aggregate_snapshots".to_string()));
@@ -201,6 +232,15 @@ mod tests {
         let count: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='vec_memories'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='vec_l2_chunks'",
                 [],
                 |row| row.get(0),
             )

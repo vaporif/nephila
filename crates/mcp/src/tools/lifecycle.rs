@@ -11,7 +11,7 @@ use meridian_core::directive::Directive;
 use meridian_core::embedding::EmbeddingProvider;
 use meridian_core::event::BusEvent;
 use meridian_core::store::{
-    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
@@ -55,7 +55,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -147,7 +147,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -226,7 +226,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -239,7 +239,7 @@ where
         let agent_id = parse_agent_id(&params.agent_id)?;
         if let Err(e) = service
             .cmd_tx
-            .send(OrchestratorCommand::RequestReset { agent_id })
+            .send(OrchestratorCommand::Suspend { agent_id })
             .await
         {
             tracing::warn!(%agent_id, %e, "failed to send reset command");

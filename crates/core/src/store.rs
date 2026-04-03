@@ -1,9 +1,10 @@
 use crate::agent::{Agent, AgentState};
-use crate::checkpoint::{Checkpoint, L0State, L2Chunk};
+use crate::checkpoint::{CheckpointNode, L2Chunk, L2SearchResult};
 use crate::directive::Directive;
 use crate::error::Result;
 use crate::event::McpEvent;
 use crate::id::*;
+use crate::interrupt::InterruptRequest;
 use crate::memory::{Embedding, LifecycleState, Link, MemoryEntry, SearchResult};
 use crate::objective::{NewObjective, ObjectiveNode, ObjectiveStatus, ObjectiveTree};
 use chrono::{DateTime, Utc};
@@ -40,39 +41,66 @@ pub trait AgentStore: Send + Sync {
         message: Option<String>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
-    fn set_checkpoint_version(
+    fn set_checkpoint_id(
         &self,
         id: AgentId,
-        version: CheckpointVersion,
+        checkpoint_id: CheckpointId,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    fn set_restore_checkpoint(
+        &self,
+        id: AgentId,
+        checkpoint_id: Option<CheckpointId>,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 pub trait CheckpointStore: Send + Sync {
     fn save(
         &self,
-        agent_id: AgentId,
-        version: CheckpointVersion,
-        l0: &L0State,
-        l1: &str,
+        node: &CheckpointNode,
         l2_chunks: &[L2Chunk],
         l2_embeddings: &[Embedding],
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
+    fn get(
+        &self,
+        id: CheckpointId,
+    ) -> impl std::future::Future<Output = Result<Option<CheckpointNode>>> + Send;
+
     fn get_latest(
         &self,
         agent_id: AgentId,
-    ) -> impl std::future::Future<Output = Result<Option<Checkpoint>>> + Send;
+    ) -> impl std::future::Future<Output = Result<Option<CheckpointNode>>> + Send;
 
-    fn get_version(
+    fn get_children(
+        &self,
+        id: CheckpointId,
+    ) -> impl std::future::Future<Output = Result<Vec<CheckpointNode>>> + Send;
+
+    fn get_ancestry(
+        &self,
+        id: CheckpointId,
+    ) -> impl std::future::Future<Output = Result<Vec<CheckpointNode>>> + Send;
+
+    fn list_branches(
         &self,
         agent_id: AgentId,
-        version: CheckpointVersion,
-    ) -> impl std::future::Future<Output = Result<Option<Checkpoint>>> + Send;
+    ) -> impl std::future::Future<Output = Result<Vec<CheckpointNode>>> + Send;
 
-    fn list_versions(
+    fn search_l2(
         &self,
         agent_id: AgentId,
-    ) -> impl std::future::Future<Output = Result<Vec<CheckpointVersion>>> + Send;
+        namespace: Option<&str>,
+        embedding: &[f32],
+        limit: usize,
+    ) -> impl std::future::Future<Output = Result<Vec<L2SearchResult>>> + Send;
+
+    fn search_l2_global(
+        &self,
+        namespace: Option<&str>,
+        embedding: &[f32],
+        limit: usize,
+    ) -> impl std::future::Future<Output = Result<Vec<L2SearchResult>>> + Send;
 }
 
 pub trait MemoryStore: Send + Sync {
@@ -165,16 +193,26 @@ pub trait McpEventLog: Send + Sync {
     ) -> impl std::future::Future<Output = Result<Vec<McpEvent>>> + Send;
 }
 
-pub trait HitlStore: Send + Sync {
-    fn record_ask(
+pub trait InterruptStore: Send + Sync {
+    fn save(
         &self,
-        agent_id: AgentId,
-        question_hash: u64,
-    ) -> impl std::future::Future<Output = Result<u32>> + Send;
+        request: &InterruptRequest,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 
-    fn get_ask_count(
+    fn get_pending(
         &self,
         agent_id: AgentId,
-        question_hash: u64,
-    ) -> impl std::future::Future<Output = Result<u32>> + Send;
+    ) -> impl std::future::Future<Output = Result<Option<InterruptRequest>>> + Send;
+
+    fn resolve(
+        &self,
+        id: InterruptId,
+        response: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    fn expire(&self, id: InterruptId) -> impl std::future::Future<Output = Result<()>> + Send;
+
+    fn list_pending(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<InterruptRequest>>> + Send;
 }

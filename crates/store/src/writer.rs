@@ -64,8 +64,8 @@ mod tests {
             .execute(|conn| {
                 let now = chrono::Utc::now().to_rfc3339();
                 conn.execute(
-                    "INSERT INTO agents (id, state, directive, directory, objective_id, created_at, updated_at)
-                     VALUES ('agent-1', 'starting', 'continue', '/tmp', 'obj-1', ?1, ?2)",
+                    "INSERT INTO agents (id, state, directive, directory, objective_id, spawn_origin_type, created_at, updated_at)
+                     VALUES ('agent-1', 'starting', 'continue', '/tmp', 'obj-1', 'operator', ?1, ?2)",
                     rusqlite::params![&now, &now],
                 )?;
                 Ok(())
@@ -73,25 +73,8 @@ mod tests {
             .await
             .unwrap();
 
-        writer
-            .execute(|conn| {
-                conn.execute(
-                    "INSERT INTO hitl_tracking (agent_id, question_hash, ask_count) VALUES (?1, ?2, ?3)",
-                    rusqlite::params!["agent-1", 12345i64, 1],
-                )?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-
-        let count: u32 = writer
-            .execute(|conn| {
-                conn.query_row(
-                    "SELECT ask_count FROM hitl_tracking WHERE agent_id = ?1 AND question_hash = ?2",
-                    rusqlite::params!["agent-1", 12345i64],
-                    |row| row.get(0),
-                )
-            })
+        let count: i64 = writer
+            .execute(|conn| conn.query_row("SELECT count(*) FROM agents", [], |row| row.get(0)))
             .await
             .unwrap();
 

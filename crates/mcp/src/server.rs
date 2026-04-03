@@ -18,12 +18,13 @@ use meridian_core::error::MeridianError;
 use meridian_core::event::BusEvent;
 use meridian_core::id::AgentId;
 use meridian_core::store::{
-    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 use crate::state::HitlRequest;
 use crate::tools::agent::{GetAgentStatusTool, GetEventLogTool, SpawnAgentTool};
 use crate::tools::checkpoint::{GetSessionCheckpointTool, SerializeAndPersistTool};
+use crate::tools::fork::ForkAgentTool;
 use crate::tools::hitl::RequestHumanInputTool;
 use crate::tools::lifecycle::{GetDirectiveTool, ReportTokenEstimateTool, RequestContextResetTool};
 use crate::tools::memory::{SearchGraphTool, StoreMemoryTool};
@@ -62,7 +63,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -83,6 +84,7 @@ where
             .with_async_tool::<SpawnAgentTool>()
             .with_async_tool::<GetAgentStatusTool>()
             .with_async_tool::<GetEventLogTool>()
+            .with_async_tool::<ForkAgentTool>()
     }
 
     pub fn new(
@@ -112,7 +114,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,

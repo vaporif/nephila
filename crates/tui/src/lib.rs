@@ -38,7 +38,6 @@ pub struct App {
     show_debug: bool,
     debug_scroll: usize,
     debug_log: TuiLogBuffer,
-    pending_rollback_agent: Option<AgentId>,
     pending_hitl: HashMap<AgentId, (String, Vec<String>)>,
     goals_dir: PathBuf,
     goals: Vec<GoalObjective>,
@@ -73,7 +72,6 @@ impl App {
             show_debug: false,
             debug_scroll: 0,
             debug_log,
-            pending_rollback_agent: None,
             pending_hitl: HashMap::new(),
             goals_dir,
             goals,
@@ -345,23 +343,6 @@ impl App {
                     }
                 }
             }
-            Modal::RollbackPicker {
-                agent_id,
-                versions,
-                selected,
-            } => {
-                if let Some(cs) = versions.get(selected)
-                    && self
-                        .send_command(TuiCommand::Rollback {
-                            agent_id,
-                            version: cs.version,
-                        })
-                        .await
-                {
-                    self.event_log
-                        .push(format!("[{agent_id}] Rollback to {} requested", cs.version));
-                }
-            }
             Modal::FilePicker { files, selected } => {
                 if let Some(path) = files.get(selected)
                     && let Some(goal) = self.goals.iter().find(|g| g.file_path == *path)
@@ -455,9 +436,6 @@ impl App {
             }
             KeyCode::Char('p') => {
                 self.handle_pause_from_objective().await;
-            }
-            KeyCode::Char('r') => {
-                self.handle_rollback_from_objective().await;
             }
             KeyCode::Char('e') => {
                 self.handle_edit_objective().await;
@@ -637,33 +615,6 @@ impl App {
         }
     }
 
-    async fn handle_rollback_from_objective(&mut self) {
-        let aid = self
-            .objective_tree
-            .panel
-            .selected()
-            .and_then(|item| item.data.agent_id());
-        if let Some(aid) = aid {
-            self.initiate_rollback(aid).await;
-        }
-    }
-
-    async fn initiate_rollback(&mut self, aid: AgentId) {
-        if self.pending_rollback_agent.is_some() {
-            return;
-        }
-        self.pending_rollback_agent = Some(aid);
-        if self
-            .cmd_tx
-            .send(TuiCommand::ListCheckpoints { agent_id: aid })
-            .await
-            .is_err()
-        {
-            self.pending_rollback_agent = None;
-            self.event_log.push("Command channel closed".into());
-        }
-    }
-
     fn handle_hitl_from_objective(&mut self) {
         let aid = self
             .objective_tree
@@ -707,12 +658,6 @@ impl App {
                         TuiCommand::Pause { agent_id: aid }
                     };
                     self.send_command(cmd).await;
-                }
-            }
-            KeyCode::Char('r') => {
-                let aid = self.agent_tree.selected().map(|item| item.data.id);
-                if let Some(aid) = aid {
-                    self.initiate_rollback(aid).await;
                 }
             }
             KeyCode::Enter => {
@@ -852,7 +797,7 @@ impl App {
                                 objective_label: label,
                                 tokens_used: None,
                                 tokens_remaining: None,
-                                checkpoint_version: None,
+                                checkpoint_id: None,
                                 hitl_pending: false,
                                 session_id: None,
                                 directory: None,
@@ -899,21 +844,6 @@ impl App {
                 self.event_log
                     .push(format!("[{agent_id}] HITL response: {response}"));
             }
-            BusEvent::CheckpointList { agent_id, versions } => {
-                if self.pending_rollback_agent == Some(*agent_id) {
-                    self.pending_rollback_agent = None;
-                    if versions.is_empty() {
-                        self.event_log
-                            .push(format!("[{agent_id}] No checkpoints available"));
-                    } else {
-                        self.modal = Modal::RollbackPicker {
-                            agent_id: *agent_id,
-                            versions: versions.clone(),
-                            selected: 0,
-                        };
-                    }
-                }
-            }
             BusEvent::AgentSessionReady {
                 agent_id,
                 session_id,
@@ -926,9 +856,12 @@ impl App {
                 self.event_log
                     .push(format!("[{agent_id}] session ready — Enter to attach"));
             }
-            BusEvent::CheckpointSaved { agent_id, version } => {
+            BusEvent::CheckpointSaved {
+                agent_id,
+                checkpoint_id,
+            } => {
                 self.event_log
-                    .push(format!("[{agent_id}] checkpoint saved: {version}"));
+                    .push(format!("[{agent_id}] checkpoint saved: {checkpoint_id}"));
             }
             BusEvent::ObjectiveUpdated {
                 objective_id,

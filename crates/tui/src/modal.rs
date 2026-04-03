@@ -1,4 +1,3 @@
-use meridian_core::checkpoint::CheckpointSummary;
 use meridian_core::id::AgentId;
 use ratatui::{
     buffer::Buffer,
@@ -17,11 +16,6 @@ pub enum Modal {
         agent_id: AgentId,
         question: String,
         options: Vec<String>,
-        selected: usize,
-    },
-    RollbackPicker {
-        agent_id: AgentId,
-        versions: Vec<CheckpointSummary>,
         selected: usize,
     },
     FilePicker {
@@ -47,7 +41,6 @@ impl Modal {
     pub fn selected_index(&self) -> Option<usize> {
         match self {
             Self::HitlResponse { selected, .. } => Some(*selected),
-            Self::RollbackPicker { selected, .. } => Some(*selected),
             Self::FilePicker { selected, .. } => Some(*selected),
             _ => None,
         }
@@ -56,7 +49,6 @@ impl Modal {
     fn item_count(&self) -> usize {
         match self {
             Self::HitlResponse { options, .. } => options.len(),
-            Self::RollbackPicker { versions, .. } => versions.len(),
             Self::FilePicker { files, .. } => files.len(),
             _ => 0,
         }
@@ -64,9 +56,7 @@ impl Modal {
 
     pub fn move_up(&mut self) {
         match self {
-            Self::HitlResponse { selected, .. }
-            | Self::RollbackPicker { selected, .. }
-            | Self::FilePicker { selected, .. } => {
+            Self::HitlResponse { selected, .. } | Self::FilePicker { selected, .. } => {
                 *selected = selected.saturating_sub(1);
             }
             _ => {}
@@ -76,9 +66,7 @@ impl Modal {
     pub fn move_down(&mut self) {
         let count = self.item_count();
         match self {
-            Self::HitlResponse { selected, .. }
-            | Self::RollbackPicker { selected, .. }
-            | Self::FilePicker { selected, .. } => {
+            Self::HitlResponse { selected, .. } | Self::FilePicker { selected, .. } => {
                 if *selected + 1 < count {
                     *selected += 1;
                 }
@@ -123,40 +111,6 @@ impl Modal {
                 lines.push(Line::from(""));
                 lines.push(Line::styled(
                     " [Enter: Select]  [Esc: Dismiss]",
-                    Style::default().fg(Color::DarkGray),
-                ));
-                Paragraph::new(lines).render(inner, buf);
-            }
-            Self::RollbackPicker {
-                agent_id,
-                versions,
-                selected,
-            } => {
-                let block = Block::default()
-                    .title(format!(" Rollback {} ", agent_id))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Magenta));
-                let inner = block.inner(popup_area);
-                block.render(popup_area, buf);
-
-                let mut lines = vec![Line::from("Select checkpoint version:"), Line::from("")];
-                for (i, cs) in versions.iter().enumerate() {
-                    let prefix = if i == *selected { " > " } else { "   " };
-                    let style = if i == *selected {
-                        Style::default()
-                            .add_modifier(Modifier::BOLD)
-                            .fg(Color::Cyan)
-                    } else {
-                        Style::default()
-                    };
-                    lines.push(Line::from(Span::styled(
-                        format!("{prefix}{} — {}", cs.version, cs.summary),
-                        style,
-                    )));
-                }
-                lines.push(Line::from(""));
-                lines.push(Line::styled(
-                    " [Enter: Select]  [Esc: Cancel]",
                     Style::default().fg(Color::DarkGray),
                 ));
                 Paragraph::new(lines).render(inner, buf);
@@ -243,7 +197,6 @@ impl Modal {
                     Line::from("  x / Del          Delete objective"),
                     Line::from("  k                Kill agent"),
                     Line::from("  p                Pause / resume agent"),
-                    Line::from("  r                Rollback to checkpoint"),
                     Line::from("  n                New objective"),
                     Line::from("  D                Toggle debug log"),
                     Line::from("  Enter            Attach to agent / HITL respond"),
@@ -278,9 +231,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
-    use meridian_core::checkpoint::CheckpointSummary;
-    use meridian_core::id::{AgentId, CheckpointVersion};
+    use meridian_core::id::AgentId;
 
     #[test]
     fn modal_is_open() {
@@ -312,28 +263,6 @@ mod tests {
         modal.move_down();
         assert_eq!(modal.selected_index(), Some(2));
         modal.move_up();
-        assert_eq!(modal.selected_index(), Some(1));
-    }
-
-    #[test]
-    fn rollback_picker_navigate() {
-        let mut modal = Modal::RollbackPicker {
-            agent_id: AgentId::new(),
-            versions: vec![
-                CheckpointSummary {
-                    version: CheckpointVersion(1),
-                    timestamp: Utc::now(),
-                    summary: "v1".into(),
-                },
-                CheckpointSummary {
-                    version: CheckpointVersion(2),
-                    timestamp: Utc::now(),
-                    summary: "v2".into(),
-                },
-            ],
-            selected: 0,
-        };
-        modal.move_down();
         assert_eq!(modal.selected_index(), Some(1));
     }
 

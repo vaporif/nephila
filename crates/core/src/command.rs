@@ -1,5 +1,5 @@
 use crate::directive::Directive;
-use crate::id::{AgentId, CheckpointVersion, ObjectiveId};
+use crate::id::{AgentId, ObjectiveId};
 use std::path::PathBuf;
 
 #[derive(Debug)]
@@ -24,19 +24,12 @@ pub enum OrchestratorCommand {
     Resume {
         agent_id: AgentId,
     },
-    Rollback {
-        agent_id: AgentId,
-        version: CheckpointVersion,
-    },
-    ListCheckpoints {
+    Suspend {
         agent_id: AgentId,
     },
     HitlRespond {
         agent_id: AgentId,
         response: String,
-    },
-    RequestReset {
-        agent_id: AgentId,
     },
     TokenThreshold {
         agent_id: AgentId,

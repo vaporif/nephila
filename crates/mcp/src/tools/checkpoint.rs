@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
@@ -6,12 +7,13 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
-use meridian_core::checkpoint::{L0State, L2Chunk};
+use meridian_core::channel::{merge_channels, validate_channels};
+use meridian_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk};
 use meridian_core::embedding::EmbeddingProvider;
 use meridian_core::event::BusEvent;
-use meridian_core::id::CheckpointVersion;
+use meridian_core::id::CheckpointId;
 use meridian_core::store::{
-    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
@@ -23,7 +25,8 @@ pub struct GetSessionCheckpointParams {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct GetSessionCheckpointOutput {
     pub found: bool,
-    pub checkpoint_json: Option<String>,
+    pub channels: Option<serde_json::Value>,
+    pub interrupt: Option<serde_json::Value>,
 }
 
 pub struct GetSessionCheckpointTool;
@@ -49,7 +52,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -60,44 +63,92 @@ where
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
-        match service
-            .store
-            .get_latest(agent_id)
+
+        // Check if agent has a restore_checkpoint_id set (for forks or explicit restore)
+        let agent = AgentStore::get(service.store.as_ref(), agent_id)
             .await
-            .map_err(meridian_err)?
-        {
-            Some(cp) => {
-                let json = serde_json::to_string(&cp)
-                    .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
-                Ok(GetSessionCheckpointOutput {
-                    found: true,
-                    checkpoint_json: Some(json),
-                })
+            .map_err(meridian_err)?;
+
+        let checkpoint_id = match agent.and_then(|a| a.restore_checkpoint_id) {
+            Some(id) => Some(id),
+            None => CheckpointStore::get_latest(service.store.as_ref(), agent_id)
+                .await
+                .map_err(meridian_err)?
+                .map(|n| n.id),
+        };
+
+        let checkpoint_id = match checkpoint_id {
+            Some(id) => id,
+            None => {
+                return Ok(GetSessionCheckpointOutput {
+                    found: false,
+                    channels: None,
+                    interrupt: None,
+                });
             }
-            None => Ok(GetSessionCheckpointOutput {
+        };
+
+        let ancestry = CheckpointStore::get_ancestry(service.store.as_ref(), checkpoint_id)
+            .await
+            .map_err(meridian_err)?;
+
+        if ancestry.is_empty() {
+            return Ok(GetSessionCheckpointOutput {
                 found: false,
-                checkpoint_json: None,
-            }),
+                channels: None,
+                interrupt: None,
+            });
         }
+
+        let merged = merge_channels(&ancestry);
+        let channels_value = serde_json::to_value(&merged)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        // Check for interrupt response
+        let interrupt = if let Some(last) = ancestry.last() {
+            if last.interrupt.is_some() {
+                let pending = InterruptStore::get_pending(service.store.as_ref(), agent_id)
+                    .await
+                    .map_err(meridian_err)?;
+                pending.map(|req| {
+                    serde_json::json!({
+                        "type": req.interrupt_type,
+                        "payload": req.payload,
+                        "response": req.response,
+                    })
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Ok(GetSessionCheckpointOutput {
+            found: true,
+            channels: Some(channels_value),
+            interrupt,
+        })
     }
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct SerializeAndPersistParams {
-    /// The agent ID performing the checkpoint.
     pub agent_id: String,
-    /// Optional L0 state (current objectives + next steps) as JSON.
-    pub l0_json: Option<String>,
-    /// Optional L1 narrative summary.
-    pub l1_summary: Option<String>,
+    /// Channel map as JSON: {"objectives": {"reducer": "overwrite", "value": [...]}, ...}
+    pub channels: String,
     /// Optional L2 detail chunks as JSON array.
     pub l2_json: Option<String>,
+    /// Optional branch label for this checkpoint.
+    pub branch_label: Option<String>,
+    /// Optional L2 namespace (defaults to "general").
+    pub l2_namespace: Option<String>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct SerializeAndPersistOutput {
     pub success: bool,
-    pub version: Option<u32>,
+    pub checkpoint_id: Option<String>,
 }
 
 pub struct SerializeAndPersistTool;
@@ -123,7 +174,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -135,16 +186,12 @@ where
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
 
-        let l0: L0State = match params.l0_json {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|e| ErrorData::invalid_params(format!("invalid l0_json: {e}"), None))?,
-            None => L0State {
-                objectives: vec![],
-                next_steps: vec![],
-            },
-        };
+        let channels: BTreeMap<String, ChannelEntry> = serde_json::from_str(&params.channels)
+            .map_err(|e| ErrorData::invalid_params(format!("invalid channels JSON: {e}"), None))?;
 
-        let l1 = params.l1_summary.unwrap_or_default();
+        validate_channels(&channels).map_err(|e| {
+            ErrorData::invalid_params(format!("channel validation failed: {e}"), None)
+        })?;
 
         let l2_chunks: Vec<L2Chunk> = match params.l2_json {
             Some(json) => serde_json::from_str(&json)
@@ -152,16 +199,21 @@ where
             None => vec![],
         };
 
-        let versions = service
-            .store
-            .list_versions(agent_id)
+        let parent_id = CheckpointStore::get_latest(service.store.as_ref(), agent_id)
             .await
-            .map_err(meridian_err)?;
-        let version = versions
-            .iter()
-            .max()
-            .map(|v| v.next())
-            .unwrap_or(CheckpointVersion(1));
+            .map_err(meridian_err)?
+            .map(|n| n.id);
+
+        let node = CheckpointNode {
+            id: CheckpointId::new(),
+            agent_id,
+            parent_id,
+            branch_label: params.branch_label,
+            channels,
+            l2_namespace: params.l2_namespace.unwrap_or_else(|| "general".into()),
+            interrupt: None,
+            created_at: chrono::Utc::now(),
+        };
 
         let l2_embeddings =
             if l2_chunks.is_empty() {
@@ -173,25 +225,36 @@ where
                 })?
             };
 
-        CheckpointStore::save(
-            service.store.as_ref(),
-            agent_id,
-            version,
-            &l0,
-            &l1,
-            &l2_chunks,
-            &l2_embeddings,
-        )
-        .await
-        .map_err(meridian_err)?;
+        let checkpoint_id = node.id;
+        CheckpointStore::save(service.store.as_ref(), &node, &l2_chunks, &l2_embeddings)
+            .await
+            .map_err(meridian_err)?;
 
-        let _ = service
-            .event_tx
-            .send(BusEvent::CheckpointSaved { agent_id, version });
+        AgentStore::set_checkpoint_id(service.store.as_ref(), agent_id, checkpoint_id)
+            .await
+            .map_err(meridian_err)?;
+
+        // Clear restore_checkpoint_id if it was set
+        let agent = AgentStore::get(service.store.as_ref(), agent_id)
+            .await
+            .map_err(meridian_err)?;
+        if agent
+            .map(|a| a.restore_checkpoint_id.is_some())
+            .unwrap_or(false)
+        {
+            AgentStore::set_restore_checkpoint(service.store.as_ref(), agent_id, None)
+                .await
+                .map_err(meridian_err)?;
+        }
+
+        let _ = service.event_tx.send(BusEvent::CheckpointSaved {
+            agent_id,
+            checkpoint_id,
+        });
 
         Ok(SerializeAndPersistOutput {
             success: true,
-            version: Some(version.0),
+            checkpoint_id: Some(checkpoint_id.to_string()),
         })
     }
 }

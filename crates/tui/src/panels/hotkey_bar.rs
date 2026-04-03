@@ -24,13 +24,9 @@ pub fn context_line(ctx: &HotkeyContext) -> &'static str {
         HotkeyContext::Nothing => "",
         HotkeyContext::ObjectivesPanelNoSelection => "S:Spawn (file picker)",
         HotkeyContext::ObjectiveSelectedNoAgent => "S:Spawn  E:Edit  V:View  X:Delete",
-        HotkeyContext::ObjectiveSelectedWithAgent => {
-            "K:Kill  P:Pause  R:Rollback  Enter:HITL  E:Edit  V:View"
-        }
-        HotkeyContext::AgentSelected => "Enter:Attach  K:Kill  P:Pause  R:Rollback",
-        HotkeyContext::AgentSelectedHitlPending => {
-            "Enter:Respond to question  K:Kill  P:Pause  R:Rollback"
-        }
+        HotkeyContext::ObjectiveSelectedWithAgent => "K:Kill  P:Pause  Enter:HITL  E:Edit  V:View",
+        HotkeyContext::AgentSelected => "Enter:Attach  K:Kill  P:Pause",
+        HotkeyContext::AgentSelectedHitlPending => "Enter:Respond to question  K:Kill  P:Pause",
         HotkeyContext::EventLogFocused => "Up/Down:Scroll  Home/End:Jump",
     }
 }

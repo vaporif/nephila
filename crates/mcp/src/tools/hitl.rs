@@ -1,19 +1,21 @@
 use std::borrow::Cow;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::time::Duration;
 
 use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
-use crate::server::{MeridianMcpServer, parse_agent_id};
-use crate::state::HitlRequest;
+use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
+use meridian_core::checkpoint::InterruptType;
+use meridian_core::command::OrchestratorCommand;
 use meridian_core::embedding::EmbeddingProvider;
 use meridian_core::event::BusEvent;
+use meridian_core::id::{CheckpointId, InterruptId};
+use meridian_core::interrupt::{InterruptRequest, InterruptStatus};
 use meridian_core::store::{
-    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
@@ -29,10 +31,8 @@ pub struct RequestHumanInputParams {
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct RequestHumanInputOutput {
-    /// The human operator's response, or a timeout message.
-    pub response: String,
-    /// Whether the response was received (false if timed out).
-    pub received: bool,
+    pub message: String,
+    pub suspending: bool,
 }
 
 pub struct RequestHumanInputTool;
@@ -47,14 +47,14 @@ impl ToolBase for RequestHumanInputTool {
     }
 
     fn description() -> Option<Cow<'static, str>> {
-        Some("Ask the human operator a question and wait for their response.".into())
+        Some("Ask the human operator a question. The agent will be suspended and the answer arrives on the next generation via get_session_checkpoint.".into())
     }
 }
 
-fn hash_question(question: &str) -> u64 {
+fn hash_question(question: &str) -> String {
     let mut hasher = DefaultHasher::new();
     question.hash(&mut hasher);
-    hasher.finish()
+    format!("{:x}", hasher.finish())
 }
 
 impl<S, E> AsyncTool<MeridianMcpServer<S, E>> for RequestHumanInputTool
@@ -64,7 +64,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -77,38 +77,33 @@ where
         let agent_id = parse_agent_id(&params.agent_id)?;
         let question_hash = hash_question(&params.question);
 
-        let ask_count = service
-            .store
-            .record_ask(agent_id, question_hash)
+        // Get the agent's current checkpoint to tie the interrupt to
+        let checkpoint_id = AgentStore::get(service.store.as_ref(), agent_id)
             .await
-            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+            .map_err(meridian_err)?
+            .and_then(|a| a.checkpoint_id)
+            .unwrap_or_else(CheckpointId::new);
 
-        if ask_count > 3 {
-            return Err(ErrorData::invalid_request(
-                "stuck loop detected: question asked more than 3 times".to_owned(),
-                None,
-            ));
-        }
+        let interrupt = InterruptRequest {
+            id: InterruptId::new(),
+            agent_id,
+            checkpoint_id,
+            interrupt_type: InterruptType::Hitl,
+            payload: Some(serde_json::json!({
+                "question": params.question,
+                "options": params.options,
+            })),
+            status: InterruptStatus::Pending,
+            response: None,
+            question_hash: Some(question_hash),
+            ask_count: 1,
+            created_at: chrono::Utc::now(),
+            resolved_at: None,
+        };
 
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        {
-            let mut requests = service.hitl_requests.write().await;
-            if requests.contains_key(&agent_id) {
-                return Err(ErrorData::invalid_request(
-                    "another HITL request is already pending for this agent".to_owned(),
-                    None,
-                ));
-            }
-            requests.insert(
-                agent_id,
-                HitlRequest {
-                    question: params.question.clone(),
-                    options: params.options.clone(),
-                    response_tx: tx,
-                },
-            );
-        }
+        InterruptStore::save(service.store.as_ref(), &interrupt)
+            .await
+            .map_err(meridian_err)?;
 
         let _ = service.event_tx.send(BusEvent::HitlRequested {
             agent_id,
@@ -116,19 +111,15 @@ where
             options: params.options,
         });
 
-        let timeout = Duration::from_secs(service.config.lifecycle.hang_timeout_secs);
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(response)) => Ok(RequestHumanInputOutput {
-                response,
-                received: true,
-            }),
-            _ => {
-                service.hitl_requests.write().await.remove(&agent_id);
-                Ok(RequestHumanInputOutput {
-                    response: "timeout".to_owned(),
-                    received: false,
-                })
-            }
-        }
+        // Trigger suspension
+        let _ = service
+            .cmd_tx
+            .send(OrchestratorCommand::Suspend { agent_id })
+            .await;
+
+        Ok(RequestHumanInputOutput {
+            message: "Question recorded. Please checkpoint your state now — you will be suspended. The answer will be available when you are restored.".into(),
+            suspending: true,
+        })
     }
 }

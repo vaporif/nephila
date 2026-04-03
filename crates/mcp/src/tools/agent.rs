@@ -13,7 +13,7 @@ use meridian_core::event::BusEvent;
 use meridian_core::id::ObjectiveId;
 use meridian_core::objective::NewObjective;
 use meridian_core::store::{
-    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 use crate::server::{MeridianMcpServer, meridian_err, parse_agent_id};
@@ -67,7 +67,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -175,7 +175,7 @@ pub struct GetAgentStatusOutput {
     pub state: Option<String>,
     pub directive: Option<String>,
     pub objective_id: Option<String>,
-    pub checkpoint_version: Option<u32>,
+    pub checkpoint_id: Option<String>,
     pub spawned_by: Option<String>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -204,7 +204,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -227,7 +227,7 @@ where
                 state: Some(a.state.to_string()),
                 directive: Some(a.directive.to_string()),
                 objective_id: Some(a.objective_id.0.to_string()),
-                checkpoint_version: a.checkpoint_version.map(|v| v.0),
+                checkpoint_id: a.checkpoint_id.map(|v| v.to_string()),
                 spawned_by: a.origin.spawned_by().map(|id| id.0.to_string()),
                 created_at: Some(a.created_at.to_rfc3339()),
                 updated_at: Some(a.updated_at.to_rfc3339()),
@@ -238,7 +238,7 @@ where
                 state: None,
                 directive: None,
                 objective_id: None,
-                checkpoint_version: None,
+                checkpoint_id: None,
                 spawned_by: None,
                 created_at: None,
                 updated_at: None,
@@ -300,7 +300,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,

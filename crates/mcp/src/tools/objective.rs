@@ -10,7 +10,7 @@ use meridian_core::embedding::EmbeddingProvider;
 use meridian_core::event::BusEvent;
 use meridian_core::objective::ObjectiveStatus;
 use meridian_core::store::{
-    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
@@ -48,7 +48,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -108,7 +108,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,

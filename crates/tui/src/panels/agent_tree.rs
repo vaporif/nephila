@@ -1,5 +1,5 @@
 use meridian_core::agent::{Agent, AgentState};
-use meridian_core::id::{AgentId, CheckpointVersion, ObjectiveId};
+use meridian_core::id::{AgentId, CheckpointId, ObjectiveId};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -15,8 +15,8 @@ use crate::layout::{focused_border_style, focused_border_type};
 fn state_color(state: &AgentState) -> Color {
     match state {
         AgentState::Active => Color::Green,
-        AgentState::Starting | AgentState::Restoring => Color::Yellow,
-        AgentState::Draining | AgentState::Paused => Color::Cyan,
+        AgentState::Starting => Color::Yellow,
+        AgentState::Suspending | AgentState::Paused => Color::Cyan,
         AgentState::Exited | AgentState::Completed => Color::Gray,
         AgentState::Failed => Color::Red,
     }
@@ -29,7 +29,7 @@ pub struct AgentTreeNode {
     pub objective_label: String,
     pub tokens_used: Option<u64>,
     pub tokens_remaining: Option<u64>,
-    pub checkpoint_version: Option<CheckpointVersion>,
+    pub checkpoint_id: Option<CheckpointId>,
     pub hitl_pending: bool,
     pub session_id: Option<String>,
     pub directory: Option<PathBuf>,
@@ -128,7 +128,7 @@ pub fn build_agent_trees(
                 objective_label: resolve_label(rec.objective_id),
                 tokens_used: None,
                 tokens_remaining: None,
-                checkpoint_version: rec.checkpoint_version,
+                checkpoint_id: rec.checkpoint_id,
                 hitl_pending: false,
                 session_id: None,
                 directory: Some(rec.directory.clone()),
@@ -256,7 +256,7 @@ mod tests {
             objective_label: "test".into(),
             tokens_used: None,
             tokens_remaining: None,
-            checkpoint_version: None,
+            checkpoint_id: None,
             hitl_pending: hitl,
             session_id: None,
             directory: None,
@@ -273,7 +273,7 @@ mod tests {
             parent_id,
             ObjectiveId::new(),
             PathBuf::from("/tmp"),
-            meridian_core::agent::SpawnOrigin::User,
+            meridian_core::agent::SpawnOrigin::Operator,
             None,
         );
         parent.state = AgentState::Active;

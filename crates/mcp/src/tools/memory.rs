@@ -10,7 +10,7 @@ use meridian_core::embedding::EmbeddingProvider;
 use meridian_core::id::EntryId;
 use meridian_core::memory::{LifecycleState, Link, MemoryEntry};
 use meridian_core::store::{
-    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
@@ -62,7 +62,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,
@@ -148,7 +148,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,

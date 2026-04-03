@@ -1,4 +1,4 @@
-use crate::id::{AgentId, CheckpointVersion, ObjectiveId};
+use crate::id::{AgentId, CheckpointId, ObjectiveId};
 use crate::objective::ObjectiveStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -50,10 +50,6 @@ pub enum BusEvent {
         agent_id: AgentId,
         response: String,
     },
-    CheckpointList {
-        agent_id: AgentId,
-        versions: Vec<crate::checkpoint::CheckpointSummary>,
-    },
     AgentSessionReady {
         agent_id: AgentId,
         session_id: String,
@@ -61,7 +57,7 @@ pub enum BusEvent {
     },
     CheckpointSaved {
         agent_id: AgentId,
-        version: CheckpointVersion,
+        checkpoint_id: CheckpointId,
     },
     ObjectiveUpdated {
         objective_id: ObjectiveId,

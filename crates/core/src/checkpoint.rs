@@ -1,18 +1,47 @@
-use crate::id::{AgentId, CheckpointVersion, EntryId, ObjectiveId};
+use crate::id::{AgentId, CheckpointId, EntryId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct L0State {
-    pub objectives: Vec<ObjectiveSnapshot>,
-    pub next_steps: Vec<String>,
+pub struct CheckpointNode {
+    pub id: CheckpointId,
+    pub agent_id: AgentId,
+    pub parent_id: Option<CheckpointId>,
+    pub branch_label: Option<String>,
+    pub channels: BTreeMap<String, ChannelEntry>,
+    pub l2_namespace: String,
+    pub interrupt: Option<InterruptSnapshot>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ObjectiveSnapshot {
-    pub id: ObjectiveId,
-    pub description: String,
-    pub status: String,
+pub struct ChannelEntry {
+    pub reducer: ReducerKind,
+    pub value: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReducerKind {
+    Overwrite,
+    Append,
+    SetUnion,
+    Sum,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterruptSnapshot {
+    pub interrupt_type: InterruptType,
+    pub payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterruptType {
+    Drain,
+    Hitl,
+    Pause,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,28 +52,18 @@ pub struct L2Chunk {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Checkpoint {
+pub struct L2SearchResult {
+    pub chunk: L2Chunk,
     pub agent_id: AgentId,
-    pub version: CheckpointVersion,
-    pub l0: L0State,
-    pub l1: String,
-    pub timestamp: DateTime<Utc>,
+    pub namespace: String,
+    pub score: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CheckpointSummary {
-    pub version: CheckpointVersion,
-    pub timestamp: DateTime<Utc>,
-    pub summary: String,
-}
+pub const REQUIRED_CHANNELS: &[&str] = &["objectives", "progress_summary", "decisions", "blockers"];
 
-/// Missing fields are filled in by the active Summarizer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CheckpointInput {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub l0: Option<L0State>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub l1: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub l2: Option<Vec<L2Chunk>>,
+pub struct ForkRequest {
+    pub source_checkpoint_id: CheckpointId,
+    pub branch_label: String,
+    pub directive_override: Option<String>,
 }

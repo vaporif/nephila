@@ -14,7 +14,7 @@ use meridian_core::embedding::EmbeddingProvider;
 use meridian_core::event::BusEvent;
 use meridian_core::id::AgentId;
 use meridian_core::store::{
-    AgentStore, CheckpointStore, HitlStore, McpEventLog, MemoryStore, ObjectiveStore,
+    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
 };
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
@@ -39,7 +39,7 @@ where
         + MemoryStore
         + ObjectiveStore
         + McpEventLog
-        + HitlStore
+        + InterruptStore
         + Send
         + Sync
         + 'static,

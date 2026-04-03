@@ -2,7 +2,7 @@ pub mod agent;
 pub mod checkpoint;
 pub mod domain_event;
 pub mod event;
-pub mod hitl;
+pub mod interrupt;
 pub mod memory;
 pub mod objective;
 pub mod schema;

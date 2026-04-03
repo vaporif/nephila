@@ -4,13 +4,12 @@ use std::sync::Arc;
 
 use meridian_connector::{ClaudeCodeConnector, TaskConnectorKind};
 use meridian_core::agent::{Agent, AgentCommand, AgentEvent, SpawnOrigin};
-use meridian_core::checkpoint::CheckpointSummary;
 use meridian_core::command::OrchestratorCommand;
 use meridian_core::config::ConnectorConfig;
 use meridian_core::directive::Directive;
 use meridian_core::event::BusEvent;
 use meridian_core::id::{AgentId, ObjectiveId};
-use meridian_core::store::{AgentStore, CheckpointStore};
+use meridian_core::store::AgentStore;
 use meridian_mcp::state::HitlRequest;
 use meridian_store::SqliteStore;
 use tokio::sync::{RwLock, broadcast, mpsc};
@@ -99,19 +98,11 @@ impl Orchestrator {
                 OrchestratorCommand::Resume { agent_id } => {
                     self.dispatch(agent_id, AgentCommand::Resume).await
                 }
-                OrchestratorCommand::Rollback { agent_id, version } => {
-                    self.dispatch(agent_id, AgentCommand::Rollback { version })
-                        .await
-                }
-                OrchestratorCommand::ListCheckpoints { agent_id } => {
-                    self.list_checkpoints(agent_id).await;
-                    Ok(())
-                }
                 OrchestratorCommand::HitlRespond { agent_id, response } => {
                     self.hitl_respond(agent_id, response).await;
                     Ok(())
                 }
-                OrchestratorCommand::RequestReset { agent_id } => {
+                OrchestratorCommand::Suspend { agent_id } => {
                     self.dispatch(agent_id, AgentCommand::Kill).await
                 }
                 OrchestratorCommand::TokenThreshold {
@@ -120,7 +111,7 @@ impl Orchestrator {
                 } => match directive {
                     Directive::Abort => self.dispatch(agent_id, AgentCommand::Kill).await,
                     Directive::PrepareReset => {
-                        self.dispatch(agent_id, AgentCommand::StartDraining).await
+                        self.dispatch(agent_id, AgentCommand::StartSuspending).await
                     }
                     _ => Ok(()),
                 },
@@ -143,7 +134,7 @@ impl Orchestrator {
     ) -> color_eyre::Result<AgentId> {
         let origin = match spawned_by {
             Some(parent) => SpawnOrigin::Agent(parent),
-            None => SpawnOrigin::User,
+            None => SpawnOrigin::Operator,
         };
         let agent = Agent::new(AgentId::new(), objective_id, dir, origin, Some(content));
         let agent_id = agent.id;
@@ -197,40 +188,6 @@ impl Orchestrator {
         Ok(())
     }
 
-    async fn list_checkpoints(&self, agent_id: AgentId) {
-        match self.store.list_versions(agent_id).await {
-            Ok(versions) => {
-                let mut summaries = Vec::new();
-                for v in versions {
-                    match self.store.get_version(agent_id, v).await {
-                        Err(e) => {
-                            tracing::warn!(%agent_id, %v, %e, "failed to load checkpoint version");
-                        }
-                        Ok(None) => {}
-                        Ok(Some(cp)) => {
-                            summaries.push(CheckpointSummary {
-                                version: cp.version,
-                                timestamp: cp.timestamp,
-                                summary: cp.l1.chars().take(80).collect(),
-                            });
-                        }
-                    }
-                }
-                let _ = self.event_tx.send(BusEvent::CheckpointList {
-                    agent_id,
-                    versions: summaries,
-                });
-            }
-            Err(e) => {
-                tracing::error!(%agent_id, %e, "failed to list checkpoints");
-                let _ = self.event_tx.send(BusEvent::CheckpointList {
-                    agent_id,
-                    versions: vec![],
-                });
-            }
-        }
-    }
-
     async fn hitl_respond(&self, agent_id: AgentId, response: String) {
         let request = self.hitl_requests.write().await.remove(&agent_id);
         match request {
@@ -272,10 +229,9 @@ impl Orchestrator {
                     });
                 }
                 AgentEvent::DirectiveChanged { .. }
-                | AgentEvent::CheckpointVersionSet { .. }
+                | AgentEvent::CheckpointIdSet { .. }
                 | AgentEvent::AgentSpawned { .. }
                 | AgentEvent::AgentKilled { .. }
-                | AgentEvent::CheckpointCompleted { .. }
                 | AgentEvent::HitlRequested { .. }
                 | AgentEvent::HitlResolved { .. }
                 | AgentEvent::TokenThresholdReached { .. } => {}
@@ -295,7 +251,7 @@ mod tests {
         use meridian_core::agent::SpawnOrigin;
         let origin = match spawned_by {
             Some(parent) => SpawnOrigin::Agent(parent),
-            None => SpawnOrigin::User,
+            None => SpawnOrigin::Operator,
         };
         Agent::new(id, ObjectiveId::new(), PathBuf::from("/tmp"), origin, None)
     }

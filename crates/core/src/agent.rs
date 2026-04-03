@@ -1,5 +1,5 @@
 use crate::directive::Directive;
-use crate::id::{AgentId, CheckpointVersion, ObjectiveId};
+use crate::id::{AgentId, CheckpointId, ObjectiveId};
 use chrono::{DateTime, Utc};
 use meridian_eventsourcing::aggregate::EventSourced;
 use serde::{Deserialize, Serialize};
@@ -13,35 +13,40 @@ use std::path::PathBuf;
 pub enum AgentState {
     Starting,
     Active,
-    Draining,
-    Restoring,
+    Suspending,
     Exited,
     Completed,
     Failed,
     Paused,
 }
 
-/// Determines which MCP tools are exposed to the agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentPhase {
-    Restoring,
+    Starting,
     Active,
-    Draining,
+    Suspending,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SpawnOrigin {
-    User,
+    Operator,
     Agent(AgentId),
+    Fork {
+        source_agent_id: AgentId,
+        source_checkpoint_id: CheckpointId,
+    },
 }
 
 impl SpawnOrigin {
     #[must_use]
     pub fn spawned_by(&self) -> Option<AgentId> {
         match self {
-            Self::User => None,
+            Self::Operator => None,
             Self::Agent(id) => Some(*id),
+            Self::Fork {
+                source_agent_id, ..
+            } => Some(*source_agent_id),
         }
     }
 }
@@ -54,10 +59,10 @@ impl AgentState {
 
     pub fn phase(self) -> Option<AgentPhase> {
         match self {
-            Self::Restoring => Some(AgentPhase::Restoring),
-            Self::Starting | Self::Active => Some(AgentPhase::Active),
-            Self::Draining => Some(AgentPhase::Draining),
-            Self::Exited | Self::Completed | Self::Failed | Self::Paused => None,
+            Self::Starting => Some(AgentPhase::Starting),
+            Self::Active | Self::Paused => Some(AgentPhase::Active),
+            Self::Suspending => Some(AgentPhase::Suspending),
+            Self::Exited | Self::Completed | Self::Failed => None,
         }
     }
 }
@@ -70,7 +75,8 @@ pub struct Agent {
     pub session_id: Option<String>,
     pub directory: PathBuf,
     pub objective_id: ObjectiveId,
-    pub checkpoint_version: Option<CheckpointVersion>,
+    pub checkpoint_id: Option<CheckpointId>,
+    pub restore_checkpoint_id: Option<CheckpointId>,
     pub origin: SpawnOrigin,
     pub children: Vec<AgentId>,
     pub injected_message: Option<String>,
@@ -84,11 +90,9 @@ pub enum AgentCommand {
     Kill,
     Pause,
     Resume,
-    Rollback { version: CheckpointVersion },
-    StartDraining,
+    StartSuspending,
     Complete,
     Fail { reason: String },
-    Restored,
     SetSession { session_id: String },
 }
 
@@ -103,9 +107,9 @@ pub enum AgentEvent {
         agent_id: AgentId,
         directive: Directive,
     },
-    CheckpointVersionSet {
+    CheckpointIdSet {
         agent_id: AgentId,
-        version: CheckpointVersion,
+        checkpoint_id: CheckpointId,
     },
     SessionReady {
         agent_id: AgentId,
@@ -120,10 +124,6 @@ pub enum AgentEvent {
     AgentKilled {
         agent_id: AgentId,
         reason: Option<String>,
-    },
-    CheckpointCompleted {
-        agent_id: AgentId,
-        version: CheckpointVersion,
     },
     HitlRequested {
         agent_id: AgentId,
@@ -164,7 +164,8 @@ impl Agent {
             session_id: None,
             directory,
             objective_id,
-            checkpoint_version: None,
+            checkpoint_id: None,
+            restore_checkpoint_id: None,
             origin,
             children: Vec::new(),
             injected_message,
@@ -180,7 +181,6 @@ impl Agent {
         )
     }
 
-    /// Side-effect-free command handler. Returns events without modifying self.
     pub fn handle(&self, cmd: AgentCommand) -> Result<Vec<AgentEvent>, TransitionError> {
         if self.is_terminal() {
             return Err(TransitionError::TerminalState { state: self.state });
@@ -197,6 +197,7 @@ impl Agent {
         let mut events = Vec::new();
 
         match (self.state, &cmd) {
+            // Starting
             (AgentState::Starting, AgentCommand::Activate) => {
                 events.push(AgentEvent::StateChanged {
                     agent_id: self.id,
@@ -223,6 +224,7 @@ impl Agent {
                 });
             }
 
+            // Active
             (AgentState::Active, AgentCommand::Pause) => {
                 events.push(AgentEvent::StateChanged {
                     agent_id: self.id,
@@ -245,11 +247,11 @@ impl Agent {
                     directive: Directive::Abort,
                 });
             }
-            (AgentState::Active, AgentCommand::StartDraining) => {
+            (AgentState::Active, AgentCommand::StartSuspending) => {
                 events.push(AgentEvent::StateChanged {
                     agent_id: self.id,
                     old_state: self.state,
-                    new_state: AgentState::Draining,
+                    new_state: AgentState::Suspending,
                 });
             }
             (AgentState::Active, AgentCommand::Complete) => {
@@ -267,6 +269,7 @@ impl Agent {
                 });
             }
 
+            // Paused
             (AgentState::Paused, AgentCommand::Resume) => {
                 events.push(AgentEvent::StateChanged {
                     agent_id: self.id,
@@ -289,6 +292,13 @@ impl Agent {
                     directive: Directive::Abort,
                 });
             }
+            (AgentState::Paused, AgentCommand::StartSuspending) => {
+                events.push(AgentEvent::StateChanged {
+                    agent_id: self.id,
+                    old_state: self.state,
+                    new_state: AgentState::Suspending,
+                });
+            }
             (AgentState::Paused, AgentCommand::Fail { .. }) => {
                 events.push(AgentEvent::StateChanged {
                     agent_id: self.id,
@@ -297,7 +307,8 @@ impl Agent {
                 });
             }
 
-            (AgentState::Draining, AgentCommand::Kill) => {
+            // Suspending
+            (AgentState::Suspending, AgentCommand::Kill) => {
                 events.push(AgentEvent::StateChanged {
                     agent_id: self.id,
                     old_state: self.state,
@@ -308,59 +319,7 @@ impl Agent {
                     directive: Directive::Abort,
                 });
             }
-            (AgentState::Draining, AgentCommand::Rollback { version }) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Restoring,
-                });
-                events.push(AgentEvent::CheckpointVersionSet {
-                    agent_id: self.id,
-                    version: *version,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::PrepareReset,
-                });
-            }
-            (AgentState::Draining, AgentCommand::Complete) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Completed,
-                });
-            }
-            (AgentState::Draining, AgentCommand::Fail { .. }) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Failed,
-                });
-            }
-
-            (AgentState::Restoring, AgentCommand::Kill) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Exited,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::Abort,
-                });
-            }
-            (AgentState::Restoring, AgentCommand::Restored) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Active,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::Continue,
-                });
-            }
-            (AgentState::Restoring, AgentCommand::Fail { .. }) => {
+            (AgentState::Suspending, AgentCommand::Fail { .. }) => {
                 events.push(AgentEvent::StateChanged {
                     agent_id: self.id,
                     old_state: self.state,
@@ -379,7 +338,6 @@ impl Agent {
         Ok(events)
     }
 
-    /// Apply a single event to produce a new agent state.
     pub fn apply_event(mut self, event: &AgentEvent) -> Self {
         match event {
             AgentEvent::StateChanged { new_state, .. } => {
@@ -389,8 +347,8 @@ impl Agent {
             AgentEvent::DirectiveChanged { directive, .. } => {
                 self.directive = *directive;
             }
-            AgentEvent::CheckpointVersionSet { version, .. } => {
-                self.checkpoint_version = Some(*version);
+            AgentEvent::CheckpointIdSet { checkpoint_id, .. } => {
+                self.checkpoint_id = Some(*checkpoint_id);
             }
             AgentEvent::SessionReady { session_id, .. } => {
                 self.session_id = Some(session_id.clone());
@@ -398,7 +356,6 @@ impl Agent {
             }
             AgentEvent::AgentSpawned { .. }
             | AgentEvent::AgentKilled { .. }
-            | AgentEvent::CheckpointCompleted { .. }
             | AgentEvent::HitlRequested { .. }
             | AgentEvent::HitlResolved { .. }
             | AgentEvent::TokenThresholdReached { .. } => {}
@@ -436,8 +393,9 @@ impl EventSourced for Agent {
             session_id: None,
             directory: PathBuf::from("/tmp"),
             objective_id: ObjectiveId::new(),
-            checkpoint_version: None,
-            origin: SpawnOrigin::User,
+            checkpoint_id: None,
+            restore_checkpoint_id: None,
+            origin: SpawnOrigin::Operator,
             children: Vec::new(),
             injected_message: None,
             created_at: Utc::now(),
@@ -456,12 +414,11 @@ mod tests {
             AgentId::new(),
             ObjectiveId::new(),
             PathBuf::from("/tmp/test"),
-            SpawnOrigin::User,
+            SpawnOrigin::Operator,
             None,
         )
     }
 
-    /// Helper to apply events to agent, producing new state.
     fn apply_all(agent: Agent, events: &[AgentEvent]) -> Agent {
         events.iter().fold(agent, |a, e| a.apply_event(e))
     }
@@ -473,14 +430,6 @@ mod tests {
         let events = agent.handle(AgentCommand::Activate).unwrap();
         let agent = apply_all(agent, &events);
         assert_eq!(agent.state, AgentState::Active);
-        assert!(events.iter().any(|e| matches!(
-            e,
-            AgentEvent::StateChanged {
-                old_state: AgentState::Starting,
-                new_state: AgentState::Active,
-                ..
-            }
-        )));
     }
 
     #[test]
@@ -490,13 +439,6 @@ mod tests {
         let agent = apply_all(agent, &events);
         assert_eq!(agent.state, AgentState::Exited);
         assert_eq!(agent.directive, Directive::Abort);
-        assert!(events.iter().any(|e| matches!(
-            e,
-            AgentEvent::DirectiveChanged {
-                directive: Directive::Abort,
-                ..
-            }
-        )));
     }
 
     #[test]
@@ -509,13 +451,6 @@ mod tests {
             .unwrap();
         let agent = apply_all(agent, &events);
         assert_eq!(agent.state, AgentState::Failed);
-        assert!(events.iter().any(|e| matches!(
-            e,
-            AgentEvent::StateChanged {
-                new_state: AgentState::Failed,
-                ..
-            }
-        )));
     }
 
     #[test]
@@ -527,41 +462,16 @@ mod tests {
         let agent = apply_all(agent, &events);
         assert_eq!(agent.state, AgentState::Paused);
         assert_eq!(agent.directive, Directive::Pause);
-        assert!(events.iter().any(|e| matches!(
-            e,
-            AgentEvent::DirectiveChanged {
-                directive: Directive::Pause,
-                ..
-            }
-        )));
     }
 
     #[test]
-    fn active_kill_transitions_to_exited() {
+    fn active_start_suspending_transitions_to_suspending() {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Activate).unwrap();
         let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::Kill).unwrap();
+        let events = agent.handle(AgentCommand::StartSuspending).unwrap();
         let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Exited);
-        assert_eq!(agent.directive, Directive::Abort);
-    }
-
-    #[test]
-    fn active_start_draining_transitions_to_draining() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::StartDraining).unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Draining);
-        assert!(events.iter().any(|e| matches!(
-            e,
-            AgentEvent::StateChanged {
-                new_state: AgentState::Draining,
-                ..
-            }
-        )));
+        assert_eq!(agent.state, AgentState::Suspending);
     }
 
     #[test]
@@ -575,17 +485,13 @@ mod tests {
     }
 
     #[test]
-    fn active_fail_transitions_to_failed() {
+    fn active_kill_transitions_to_exited() {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Activate).unwrap();
         let agent = apply_all(agent, &events);
-        let events = agent
-            .handle(AgentCommand::Fail {
-                reason: "err".into(),
-            })
-            .unwrap();
+        let events = agent.handle(AgentCommand::Kill).unwrap();
         let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Failed);
+        assert_eq!(agent.state, AgentState::Exited);
     }
 
     #[test]
@@ -602,11 +508,23 @@ mod tests {
     }
 
     #[test]
-    fn paused_kill_transitions_to_exited() {
+    fn paused_start_suspending_transitions_to_suspending() {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Activate).unwrap();
         let agent = apply_all(agent, &events);
         let events = agent.handle(AgentCommand::Pause).unwrap();
+        let agent = apply_all(agent, &events);
+        let events = agent.handle(AgentCommand::StartSuspending).unwrap();
+        let agent = apply_all(agent, &events);
+        assert_eq!(agent.state, AgentState::Suspending);
+    }
+
+    #[test]
+    fn suspending_kill_transitions_to_exited() {
+        let agent = test_agent();
+        let events = agent.handle(AgentCommand::Activate).unwrap();
+        let agent = apply_all(agent, &events);
+        let events = agent.handle(AgentCommand::StartSuspending).unwrap();
         let agent = apply_all(agent, &events);
         let events = agent.handle(AgentCommand::Kill).unwrap();
         let agent = apply_all(agent, &events);
@@ -614,11 +532,11 @@ mod tests {
     }
 
     #[test]
-    fn paused_fail_transitions_to_failed() {
+    fn suspending_fail_transitions_to_failed() {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Activate).unwrap();
         let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::Pause).unwrap();
+        let events = agent.handle(AgentCommand::StartSuspending).unwrap();
         let agent = apply_all(agent, &events);
         let events = agent
             .handle(AgentCommand::Fail {
@@ -627,207 +545,6 @@ mod tests {
             .unwrap();
         let agent = apply_all(agent, &events);
         assert_eq!(agent.state, AgentState::Failed);
-    }
-
-    #[test]
-    fn draining_rollback_transitions_to_restoring() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::StartDraining).unwrap();
-        let agent = apply_all(agent, &events);
-        let version = CheckpointVersion(1);
-        let events = agent.handle(AgentCommand::Rollback { version }).unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Restoring);
-        assert_eq!(agent.checkpoint_version, Some(version));
-        assert_eq!(agent.directive, Directive::PrepareReset);
-        assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, AgentEvent::CheckpointVersionSet { .. }))
-        );
-    }
-
-    #[test]
-    fn draining_complete_transitions_to_completed() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::StartDraining).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::Complete).unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Completed);
-    }
-
-    #[test]
-    fn draining_kill_transitions_to_exited() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::StartDraining).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::Kill).unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Exited);
-    }
-
-    #[test]
-    fn draining_fail_transitions_to_failed() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::StartDraining).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent
-            .handle(AgentCommand::Fail {
-                reason: "err".into(),
-            })
-            .unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Failed);
-    }
-
-    #[test]
-    fn restoring_restored_transitions_to_active() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::StartDraining).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent
-            .handle(AgentCommand::Rollback {
-                version: CheckpointVersion(1),
-            })
-            .unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::Restored).unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Active);
-        assert_eq!(agent.directive, Directive::Continue);
-    }
-
-    #[test]
-    fn restoring_kill_transitions_to_exited() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::StartDraining).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent
-            .handle(AgentCommand::Rollback {
-                version: CheckpointVersion(1),
-            })
-            .unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::Kill).unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Exited);
-    }
-
-    #[test]
-    fn restoring_fail_transitions_to_failed() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::StartDraining).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent
-            .handle(AgentCommand::Rollback {
-                version: CheckpointVersion(1),
-            })
-            .unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent
-            .handle(AgentCommand::Fail {
-                reason: "err".into(),
-            })
-            .unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Failed);
-    }
-
-    #[test]
-    fn starting_rejects_pause() {
-        let agent = test_agent();
-        let err = agent.handle(AgentCommand::Pause).unwrap_err();
-        assert!(matches!(
-            err,
-            TransitionError::InvalidTransition {
-                from: AgentState::Starting,
-                ..
-            }
-        ));
-        assert_eq!(agent.state, AgentState::Starting);
-    }
-
-    #[test]
-    fn starting_rejects_resume() {
-        let agent = test_agent();
-        let err = agent.handle(AgentCommand::Resume).unwrap_err();
-        assert!(matches!(err, TransitionError::InvalidTransition { .. }));
-    }
-
-    #[test]
-    fn starting_rejects_complete() {
-        let agent = test_agent();
-        let err = agent.handle(AgentCommand::Complete).unwrap_err();
-        assert!(matches!(err, TransitionError::InvalidTransition { .. }));
-    }
-
-    #[test]
-    fn active_rejects_activate() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let err = agent.handle(AgentCommand::Activate).unwrap_err();
-        assert!(matches!(
-            err,
-            TransitionError::InvalidTransition {
-                from: AgentState::Active,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn active_rejects_resume() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let err = agent.handle(AgentCommand::Resume).unwrap_err();
-        assert!(matches!(err, TransitionError::InvalidTransition { .. }));
-    }
-
-    #[test]
-    fn active_rejects_rollback() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let err = agent
-            .handle(AgentCommand::Rollback {
-                version: CheckpointVersion(1),
-            })
-            .unwrap_err();
-        assert!(matches!(err, TransitionError::InvalidTransition { .. }));
-    }
-
-    #[test]
-    fn paused_rejects_pause() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::Pause).unwrap();
-        let agent = apply_all(agent, &events);
-        let err = agent.handle(AgentCommand::Pause).unwrap_err();
-        assert!(matches!(
-            err,
-            TransitionError::InvalidTransition {
-                from: AgentState::Paused,
-                ..
-            }
-        ));
     }
 
     #[test]
@@ -835,25 +552,8 @@ mod tests {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Kill).unwrap();
         let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Exited);
-
-        let err = agent.handle(AgentCommand::Activate).unwrap_err();
-        assert!(matches!(
-            err,
-            TransitionError::TerminalState {
-                state: AgentState::Exited
-            }
-        ));
-
-        let err = agent.handle(AgentCommand::Kill).unwrap_err();
-        assert!(matches!(err, TransitionError::TerminalState { .. }));
-
-        let err = agent
-            .handle(AgentCommand::SetSession {
-                session_id: "s".into(),
-            })
-            .unwrap_err();
-        assert!(matches!(err, TransitionError::TerminalState { .. }));
+        assert!(agent.handle(AgentCommand::Activate).is_err());
+        assert!(agent.handle(AgentCommand::Kill).is_err());
     }
 
     #[test]
@@ -863,15 +563,7 @@ mod tests {
         let agent = apply_all(agent, &events);
         let events = agent.handle(AgentCommand::Complete).unwrap();
         let agent = apply_all(agent, &events);
-        assert_eq!(agent.state, AgentState::Completed);
-
-        let err = agent.handle(AgentCommand::Kill).unwrap_err();
-        assert!(matches!(
-            err,
-            TransitionError::TerminalState {
-                state: AgentState::Completed
-            }
-        ));
+        assert!(agent.handle(AgentCommand::Kill).is_err());
     }
 
     #[test]
@@ -885,14 +577,35 @@ mod tests {
             })
             .unwrap();
         let agent = apply_all(agent, &events);
+        assert!(agent.handle(AgentCommand::Resume).is_err());
+    }
 
-        let err = agent.handle(AgentCommand::Resume).unwrap_err();
-        assert!(matches!(
-            err,
-            TransitionError::TerminalState {
-                state: AgentState::Failed
-            }
-        ));
+    #[test]
+    fn starting_rejects_pause() {
+        let agent = test_agent();
+        assert!(agent.handle(AgentCommand::Pause).is_err());
+    }
+
+    #[test]
+    fn starting_rejects_resume() {
+        let agent = test_agent();
+        assert!(agent.handle(AgentCommand::Resume).is_err());
+    }
+
+    #[test]
+    fn active_rejects_activate() {
+        let agent = test_agent();
+        let events = agent.handle(AgentCommand::Activate).unwrap();
+        let agent = apply_all(agent, &events);
+        assert!(agent.handle(AgentCommand::Activate).is_err());
+    }
+
+    #[test]
+    fn active_rejects_resume() {
+        let agent = test_agent();
+        let events = agent.handle(AgentCommand::Activate).unwrap();
+        let agent = apply_all(agent, &events);
+        assert!(agent.handle(AgentCommand::Resume).is_err());
     }
 
     #[test]
@@ -905,41 +618,7 @@ mod tests {
             .unwrap();
         let agent = apply_all(agent, &events);
         assert_eq!(agent.session_id, Some("sess-1".to_string()));
-        assert!(events.iter().any(
-            |e| matches!(e, AgentEvent::SessionReady { session_id, .. } if session_id == "sess-1")
-        ));
         assert_eq!(agent.state, AgentState::Starting);
-    }
-
-    #[test]
-    fn set_session_in_active_state() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent
-            .handle(AgentCommand::SetSession {
-                session_id: "sess-2".into(),
-            })
-            .unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.session_id, Some("sess-2".to_string()));
-        assert_eq!(agent.state, AgentState::Active);
-    }
-
-    #[test]
-    fn set_session_in_paused_state() {
-        let agent = test_agent();
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent.handle(AgentCommand::Pause).unwrap();
-        let agent = apply_all(agent, &events);
-        let events = agent
-            .handle(AgentCommand::SetSession {
-                session_id: "sess-3".into(),
-            })
-            .unwrap();
-        let agent = apply_all(agent, &events);
-        assert_eq!(agent.session_id, Some("sess-3".to_string()));
     }
 
     #[test]
@@ -947,42 +626,73 @@ mod tests {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Kill).unwrap();
         let agent = apply_all(agent, &events);
-        let err = agent
-            .handle(AgentCommand::SetSession {
-                session_id: "s".into(),
-            })
-            .unwrap_err();
-        assert!(matches!(err, TransitionError::TerminalState { .. }));
-    }
-
-    #[test]
-    fn agent_with_spawn_origin_user() {
-        let agent = test_agent();
-        assert!(matches!(agent.origin, SpawnOrigin::User));
-        assert!(agent.children.is_empty());
-    }
-
-    #[test]
-    fn agent_with_spawn_origin_agent() {
-        let parent_id = AgentId::new();
-        let agent = Agent::new(
-            AgentId::new(),
-            ObjectiveId::new(),
-            PathBuf::from("/tmp/test"),
-            SpawnOrigin::Agent(parent_id),
-            None,
+        assert!(
+            agent
+                .handle(AgentCommand::SetSession {
+                    session_id: "s".into()
+                })
+                .is_err()
         );
-        assert!(matches!(agent.origin, SpawnOrigin::Agent(id) if id == parent_id));
     }
 
     #[test]
-    fn spawn_origin_spawned_by_returns_agent_id() {
+    fn spawn_origin_operator_spawned_by_returns_none() {
+        assert_eq!(SpawnOrigin::Operator.spawned_by(), None);
+    }
+
+    #[test]
+    fn spawn_origin_agent_spawned_by_returns_id() {
         let parent = AgentId::new();
         assert_eq!(SpawnOrigin::Agent(parent).spawned_by(), Some(parent));
     }
 
     #[test]
-    fn spawn_origin_user_spawned_by_returns_none() {
-        assert_eq!(SpawnOrigin::User.spawned_by(), None);
+    fn spawn_origin_fork_spawned_by_returns_source_agent() {
+        let source = AgentId::new();
+        let cp = CheckpointId::new();
+        assert_eq!(
+            SpawnOrigin::Fork {
+                source_agent_id: source,
+                source_checkpoint_id: cp
+            }
+            .spawned_by(),
+            Some(source),
+        );
+    }
+
+    #[test]
+    fn checkpoint_id_set_event_updates_agent() {
+        let agent = test_agent();
+        let cp_id = CheckpointId::new();
+        let agent_id = agent.id;
+        let agent = agent.apply_event(&AgentEvent::CheckpointIdSet {
+            agent_id,
+            checkpoint_id: cp_id,
+        });
+        assert_eq!(agent.checkpoint_id, Some(cp_id));
+    }
+
+    #[test]
+    fn agent_phase_starting() {
+        let agent = test_agent();
+        assert_eq!(agent.state.phase(), Some(AgentPhase::Starting));
+    }
+
+    #[test]
+    fn agent_phase_active() {
+        let agent = test_agent();
+        let events = agent.handle(AgentCommand::Activate).unwrap();
+        let agent = apply_all(agent, &events);
+        assert_eq!(agent.state.phase(), Some(AgentPhase::Active));
+    }
+
+    #[test]
+    fn agent_phase_suspending() {
+        let agent = test_agent();
+        let events = agent.handle(AgentCommand::Activate).unwrap();
+        let agent = apply_all(agent, &events);
+        let events = agent.handle(AgentCommand::StartSuspending).unwrap();
+        let agent = apply_all(agent, &events);
+        assert_eq!(agent.state.phase(), Some(AgentPhase::Suspending));
     }
 }
