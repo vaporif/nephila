@@ -60,11 +60,7 @@ where
     ) -> Result<Self::Output, Self::Error> {
         let root_id = parse_objective_id(&params.root_id)?;
 
-        let tree = service
-            .store
-            .get_tree(root_id)
-            .await
-            .map_err(nephila_err)?;
+        let tree = service.store.get_tree(root_id).await.map_err(nephila_err)?;
         let tree_json = serde_json::to_string(&tree)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 

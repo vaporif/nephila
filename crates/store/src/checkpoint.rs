@@ -35,8 +35,8 @@ impl CheckpointStore for SqliteStore {
             .iter()
             .zip(l2_embeddings.iter())
             .map(|(chunk, emb)| {
-                let tags_json = serde_json::to_string(&chunk.tags)
-                    .map_err(nephila_core::NephilaError::from)?;
+                let tags_json =
+                    serde_json::to_string(&chunk.tags).map_err(nephila_core::NephilaError::from)?;
                 let bytes = f32_slice_to_bytes(emb);
                 Ok((
                     chunk.id,
