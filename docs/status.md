@@ -1,44 +1,34 @@
 # Meridian MVP-1 Status
 
-**Date:** 2026-03-30
+**Updated:** 2026-04-03
 
-## Implementation Progress (~75% complete)
+## What's Done
 
-### Complete
-| Area | Crate | Lines | Notes |
-|------|-------|-------|-------|
-| Core domain types | `core` | ~1,600 | All types, traits, state machine, config |
-| SQLite persistence | `store` | ~2,200 | Full schema, all 6 trait impls, sqlite-vec |
-| Local embeddings | `embedding` | ~120 | FastEmbed ONNX, 384-dim, offline |
-| Agent state machine | `core` | — | `Agent::handle(AgentCommand)` with full transition table |
-| TUI dashboard | `tui` | ~1,800 | 4 panels, modals, keyboard nav, HITL UI |
-| Binary wiring | `bin` | ~300 | Config, store init, TUI launch, AgentService |
-| Agent process mgmt | `lifecycle` | ~510 | spawn, resume, restart tracking, crash summarizer |
+| Area | Crate | Notes |
+|------|-------|-------|
+| Core domain types | `core` | Agent state machine, 6 store traits, checkpoint model with channel reducers, config |
+| SQLite persistence | `store` | All 6 trait impls (agent, checkpoint, memory, objective, event log, interrupt), sqlite-vec |
+| Local embeddings | `embedding` | FastEmbed ONNX, 384-dim, batch support |
+| LLM connectors | `connector` | ClaudeCode (subprocess), AnthropicApi (HTTP), OpenAiCompatible |
+| TUI dashboard | `tui` | 3 panels (objective tree, agent tree, event log), modals (HITL, file picker, help), goal file scanning |
+| Lifecycle | `lifecycle` | Restart tracking (sliding window), token band management |
+| Binary wiring | `bin` | Config load, store init, 4 async tasks (MCP server, orchestrator, TUI, signal handler) |
+| MCP HTTP binding | `mcp` | Axum + rmcp streamable HTTP transport, tool router |
 
-### Incomplete — MCP Tool Wiring (the critical gap)
-| Tool | Status | What's missing |
-|------|--------|---------------|
-| `get_directive` | Stub | Read directive from AgentStore |
-| `report_token_estimate` | Stub | Update agent token state, check threshold, set directive |
-| `get_session_checkpoint` | Stub | Load latest checkpoint from CheckpointStore |
-| `serialize_and_persist` | Stub | Parse L0/L1/L2, embed L2 chunks, save to CheckpointStore |
-| `search_graph` | Stub | Embed query, search MemoryStore |
-| `store_memory` | Stub | Embed content, save to MemoryStore, auto-link |
-| `get_objective_tree` | Stub | Load tree from ObjectiveStore |
-| `update_objective` | Stub | Parse status, update via ObjectiveStore |
-| `request_context_reset` | Stub | Transition agent to Exited, signal lifecycle |
-| `request_human_input` | Stub | Register oneshot, wait for TUI response |
+### MCP Tools (all 13 implemented)
 
-### Not Started
-- End-to-end integration test (MVP-1 Task 25)
-- MCP server HTTP binding (server created but not listening)
-- Token estimation from MCP traffic (deferred, self-report only for MVP-1)
+| Module | Tools | What they do |
+|--------|-------|-------------|
+| `checkpoint` | `get_session_checkpoint`, `serialize_and_persist` | Load/merge L0+L1+L2 from ancestry; save checkpoint nodes + embedded L2 chunks |
+| `lifecycle` | `report_token_estimate`, `get_directive`, `request_context_reset` | Token threshold detection (60/75/85%), directive polling, reset trigger |
+| `memory` | `search_graph`, `store_memory` | Vector search via embedder; store entries with embeddings and tags |
+| `objective` | `get_objective_tree`, `update_objective` | Tree retrieval; status updates (pending/in_progress/done/blocked) |
+| `agent` | `spawn_agent`, `get_agent_status`, `get_event_log` | Spawn with objective, status lookup, event history |
+| `hitl` | `request_human_input` | Create interrupt, store in DB, broadcast to TUI |
+| `fork` | `fork_agent` | Fork from checkpoint with optional branch label and directive override |
 
-## Key Structural Note
+## What's Left
 
-The MCP server (`MeridianMcpServer<S>`) holds `Arc<S>` (store) and `broadcast::Sender<BusEvent>` but **no embedder**. Tools that need embeddings (`search_graph`, `store_memory`, `serialize_and_persist`) need an `Arc<dyn EmbeddingProvider>` added to the server struct or passed through another mechanism.
-
-## What Comes After MCP Wiring
-1. Bind MCP server to HTTP (Axum + rmcp streamable HTTP)
-2. Wire agent spawn to write `.mcp.json` pointing to the running server
-3. End-to-end test: spawn agent -> work -> report tokens -> drain -> checkpoint -> kill -> respawn -> restore
+- End-to-end integration test (spawn → work → report tokens → drain → checkpoint → kill → respawn → restore)
+- Crash summarizer (trait defined, no real implementation yet)
+- Token estimation from MCP traffic (deferred — self-report only for MVP-1)
