@@ -123,7 +123,7 @@ Requires Rust edition 2024.
 
 MVP-1 is mostly wired up. Core domain types, SQLite persistence (with sqlite-vec), all 13 MCP tools, the lifecycle manager, and TUI are implemented. The MCP server runs over streamable HTTP via Axum. Agent spawning, token threshold detection, checkpoint save/restore, and HITL are functional. The TUI is keyboard-driven with hotkeys, tree navigation, and modal popups. Goals load from files in a `goals/` directory.
 
-What's left: end-to-end integration test for the full checkpoint/reset loop, crash summarizer implementation.
+What's left: end-to-end integration test for the full checkpoint/reset loop, crash summarizer implementation. + connection to ferrex (extracted RAG)
 
 ## License
 
