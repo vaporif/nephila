@@ -13,8 +13,8 @@ categories.workspace = true
 [dependencies]
 nephila-core = { workspace = true }
 nephila-store = { workspace = true }
-nephila-embedding = { workspace = true }
 nephila-lifecycle = { workspace = true }
+ferrex-core = { workspace = true }
 nephila-connector = { workspace = true }
 nephila-mcp = { workspace = true }
 nephila-tui = { workspace = true }
@@ -24,6 +24,7 @@ clap = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 color-eyre = { workspace = true }
+dirs = { workspace = true }
 serde = { workspace = true }
 ratatui = { workspace = true }
 chrono.workspace = true

@@ -8,17 +8,12 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use nephila_core::command::OrchestratorCommand;
-use nephila_core::embedding::EmbeddingProvider;
 use nephila_core::event::BusEvent;
 use nephila_core::id::ObjectiveId;
 use nephila_core::objective::NewObjective;
-use nephila_core::store::{
-    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
-};
+use nephila_core::store::{AgentStore, McpEventLog, ObjectiveStore};
 
 use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
-
-// ── spawn_agent ──
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct SpawnAgentParams {
@@ -60,21 +55,9 @@ impl ToolBase for SpawnAgentTool {
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for SpawnAgentTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for SpawnAgentTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let spawned_by = parse_agent_id(&params.requesting_agent_id)?;
@@ -90,7 +73,7 @@ where
             .transpose()?;
 
         let objective_id = service
-            .store
+            .sqlite
             .create(NewObjective {
                 parent_id: parent_obj_id,
                 agent_id: None,
@@ -122,8 +105,7 @@ where
             loop {
                 match event_rx.recv().await {
                     Ok(BusEvent::AgentSessionReady { agent_id, .. }) => {
-                        if let Ok(Some(agent)) =
-                            AgentStore::get(service.store.as_ref(), agent_id).await
+                        if let Ok(Some(agent)) = service.sqlite.get(agent_id).await
                             && agent.origin.spawned_by() == Some(spawned_by)
                             && agent.objective_id == objective_id
                         {
@@ -160,8 +142,6 @@ where
     }
 }
 
-// ── get_agent_status ──
-
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct GetAgentStatusParams {
     /// The agent ID to check status for.
@@ -197,28 +177,14 @@ impl ToolBase for GetAgentStatusTool {
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for GetAgentStatusTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for GetAgentStatusTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
 
-        let agent = AgentStore::get(service.store.as_ref(), agent_id)
-            .await
-            .map_err(nephila_err)?;
+        let agent = service.sqlite.get(agent_id).await.map_err(nephila_err)?;
 
         match agent {
             Some(a) => Ok(GetAgentStatusOutput {
@@ -246,8 +212,6 @@ where
         }
     }
 }
-
-// ── get_event_log ──
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetEventLogParams {
@@ -293,27 +257,15 @@ impl ToolBase for GetEventLogTool {
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for GetEventLogTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for GetEventLogTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
 
         let events = service
-            .store
+            .sqlite
             .get_events(agent_id, None, params.limit)
             .await
             .map_err(nephila_err)?;

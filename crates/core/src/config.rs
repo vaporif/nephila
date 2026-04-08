@@ -21,8 +21,10 @@ pub struct CoreConfig {
     pub storage_backend: String,
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: PathBuf,
-    #[serde(default = "default_embedding_model")]
-    pub embedding_model: String,
+    #[serde(default)]
+    pub ferrex_config_path: Option<PathBuf>,
+    #[serde(default = "default_l2_collection")]
+    pub l2_collection: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -142,8 +144,8 @@ fn default_storage_backend() -> String {
 fn default_sqlite_path() -> PathBuf {
     PathBuf::from("./nephila.db")
 }
-fn default_embedding_model() -> String {
-    "BGESmallENV15".into()
+fn default_l2_collection() -> String {
+    "nephila_l2_chunks".into()
 }
 fn default_claude_binary() -> String {
     "claude".into()
@@ -255,7 +257,7 @@ sqlite_path = "./test.db"
 [nephila]
 storage_backend = "sqlite"
 sqlite_path = "./nephila.db"
-embedding_model = "text-embedding-3-small"
+l2_collection = "nephila_l2_chunks"
 
 [lifecycle]
 context_threshold_pct = 80

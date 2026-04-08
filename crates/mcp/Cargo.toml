@@ -12,6 +12,8 @@ categories.workspace = true
 
 [dependencies]
 nephila-core = { workspace = true }
+nephila-store = { workspace = true }
+ferrex-core = { workspace = true }
 rmcp = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }

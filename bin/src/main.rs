@@ -73,17 +73,28 @@ async fn main() -> Result<()> {
         config.nephila.sqlite_path = db;
     }
 
-    let embedder = Arc::new(
-        nephila_embedding::FastEmbedder::new(&config.nephila.embedding_model)
-            .wrap_err("failed to initialize embedding model")?,
-    );
+    let ferrex_config = build_ferrex_config(&config)?;
+    let memory_service = ferrex_core::MemoryService::from_config(ferrex_config)
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!("ferrex init: {e}"))?;
 
-    let store = Arc::new(
+    let sqlite_store = Arc::new(
         nephila_store::SqliteStore::open(
             &config.nephila.sqlite_path,
-            nephila_core::embedding::EmbeddingProvider::dimension(embedder.as_ref()),
+            memory_service.embedder().dimension(),
         )
         .wrap_err("failed to open database")?,
+    );
+
+    let ferrex_store = Arc::new(
+        nephila_store::FerrexStore::new(
+            memory_service,
+            (*sqlite_store).clone(),
+            config.nephila.l2_collection.clone(),
+            "nephila",
+        )
+        .await
+        .map_err(|e| color_eyre::eyre::eyre!("ferrex store init: {e}"))?,
     );
 
     let (event_tx, event_rx) = broadcast::channel::<BusEvent>(1024);
@@ -95,8 +106,8 @@ async fn main() -> Result<()> {
     let cancellation_token = CancellationToken::new();
 
     let (mcp_handle, bound_addr) = nephila_mcp::http::serve(
-        store.clone(),
-        embedder.clone(),
+        sqlite_store.clone(),
+        ferrex_store.clone(),
         event_tx.clone(),
         cmd_tx.clone(),
         hitl_requests.clone(),
@@ -109,7 +120,7 @@ async fn main() -> Result<()> {
     tracing::info!(%bound_addr, "MCP server listening");
 
     let cmd_handle = {
-        let store = store.clone();
+        let store = sqlite_store.clone();
         let event_tx = event_tx.clone();
         let hitl_requests = hitl_requests.clone();
         let max_agent_depth = config.supervision.max_agent_depth;
@@ -158,4 +169,39 @@ async fn main() -> Result<()> {
     let _ = mcp_handle.await;
 
     Ok(())
+}
+
+const FERREX_BASELINE: &str = include_str!("../../config/ferrex.toml");
+
+fn build_ferrex_config(config: &NephilaConfig) -> Result<ferrex_core::FerrexConfig> {
+    let ferrex_dir = dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".ferrex");
+
+    let config_path = config
+        .nephila
+        .ferrex_config_path
+        .clone()
+        .unwrap_or_else(|| ferrex_dir.join("ferrex.toml"));
+
+    let loaded = ferrex_core::load_or_init(&config_path, FERREX_BASELINE)
+        .map_err(|e| color_eyre::eyre::eyre!("ferrex config: {e}"))?;
+
+    Ok(ferrex_core::FerrexConfig {
+        qdrant_url: None,
+        qdrant_bin: "qdrant".into(),
+        qdrant_port: 6334,
+        model_tier: ferrex_core::ModelTier::default(),
+        reranker_tier: ferrex_core::RerankerTier::default(),
+        namespace: "nephila".into(),
+        db_path: ferrex_dir.join("ferrex.db"),
+        config_path: Some(config_path),
+        deduplication: loaded.deduplication,
+        conflict: loaded.conflict,
+        predicates: loaded.predicates,
+        reconciliation: loaded.reconciliation,
+        staleness: loaded.staleness,
+        reader_pool_size: loaded.reader_pool_size,
+        cache: loaded.cache,
+    })
 }

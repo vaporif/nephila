@@ -1,20 +1,13 @@
 use crate::SqliteStore;
-use crate::util::{f32_slice_to_bytes, parse_rfc3339};
-use chrono::Utc;
-use nephila_core::checkpoint::{
-    ChannelEntry, CheckpointNode, InterruptSnapshot, L2Chunk, L2SearchResult,
-};
-use nephila_core::id::{AgentId, CheckpointId, EntryId};
-use nephila_core::memory::Embedding;
-use nephila_core::store::CheckpointStore;
+use crate::util::parse_rfc3339;
+use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, InterruptSnapshot};
+use nephila_core::id::{AgentId, CheckpointId};
 use std::collections::BTreeMap;
 
-impl CheckpointStore for SqliteStore {
-    async fn save(
+impl SqliteStore {
+    pub async fn save_checkpoint_metadata(
         &self,
         node: &CheckpointNode,
-        l2_chunks: &[L2Chunk],
-        l2_embeddings: &[Embedding],
     ) -> nephila_core::Result<()> {
         let id = node.id;
         let agent_id = node.agent_id;
@@ -31,69 +24,34 @@ impl CheckpointStore for SqliteStore {
             .map_err(nephila_core::NephilaError::from)?;
         let created_at = node.created_at.to_rfc3339();
 
-        let l2_data: Vec<(EntryId, String, String, String, Vec<u8>)> = l2_chunks
-            .iter()
-            .zip(l2_embeddings.iter())
-            .map(|(chunk, emb)| {
-                let tags_json =
-                    serde_json::to_string(&chunk.tags).map_err(nephila_core::NephilaError::from)?;
-                let bytes = f32_slice_to_bytes(emb);
-                Ok((
-                    chunk.id,
-                    chunk.content.clone(),
-                    tags_json,
-                    l2_namespace.clone(),
-                    bytes,
-                ))
-            })
-            .collect::<nephila_core::Result<Vec<_>>>()?;
-
         self.writer
             .execute(move |conn| {
-                let tx = conn.unchecked_transaction()?;
-
-                tx.execute(
+                conn.execute(
                     "INSERT INTO checkpoints (id, agent_id, parent_id, branch_label, channels, l2_namespace, interrupt, created_at)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     rusqlite::params![
-                        id,
-                        agent_id,
-                        parent_id,
-                        branch_label,
-                        channels_json,
-                        l2_namespace,
-                        interrupt_json,
-                        created_at,
+                        id, agent_id, parent_id, branch_label,
+                        channels_json, l2_namespace, interrupt_json, created_at,
                     ],
                 )?;
-
-                let now = Utc::now().to_rfc3339();
-                for (chunk_id, content, tags, ns, emb_bytes) in &l2_data {
-                    tx.execute(
-                        "INSERT INTO l2_chunks (id, checkpoint_id, agent_id, namespace, content, tags, created_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                        rusqlite::params![chunk_id, id, agent_id, ns, content, tags, now],
-                    )?;
-
-                    tx.execute(
-                        "INSERT INTO vec_l2_chunks (chunk_id, embedding) VALUES (?1, ?2)",
-                        rusqlite::params![chunk_id.to_string(), emb_bytes],
-                    )?;
-                }
-
-                tx.commit()?;
                 Ok(())
             })
             .await?;
         Ok(())
     }
 
-    async fn get(&self, id: CheckpointId) -> nephila_core::Result<Option<CheckpointNode>> {
+    pub async fn get_checkpoint(
+        &self,
+        id: CheckpointId,
+    ) -> nephila_core::Result<Option<CheckpointNode>> {
         let node = self.writer.execute(move |conn| load_node(conn, id)).await?;
         Ok(node)
     }
 
-    async fn get_latest(&self, agent_id: AgentId) -> nephila_core::Result<Option<CheckpointNode>> {
+    pub async fn get_latest_checkpoint(
+        &self,
+        agent_id: AgentId,
+    ) -> nephila_core::Result<Option<CheckpointNode>> {
         let node = self
             .writer
             .execute(move |conn| {
@@ -116,7 +74,10 @@ impl CheckpointStore for SqliteStore {
         Ok(node)
     }
 
-    async fn get_children(&self, id: CheckpointId) -> nephila_core::Result<Vec<CheckpointNode>> {
+    pub async fn get_checkpoint_children(
+        &self,
+        id: CheckpointId,
+    ) -> nephila_core::Result<Vec<CheckpointNode>> {
         let nodes = self
             .writer
             .execute(move |conn| {
@@ -133,7 +94,10 @@ impl CheckpointStore for SqliteStore {
         Ok(nodes)
     }
 
-    async fn get_ancestry(&self, id: CheckpointId) -> nephila_core::Result<Vec<CheckpointNode>> {
+    pub async fn get_checkpoint_ancestry(
+        &self,
+        id: CheckpointId,
+    ) -> nephila_core::Result<Vec<CheckpointNode>> {
         let nodes = self
             .writer
             .execute(move |conn| {
@@ -157,7 +121,10 @@ impl CheckpointStore for SqliteStore {
         Ok(nodes)
     }
 
-    async fn list_branches(&self, agent_id: AgentId) -> nephila_core::Result<Vec<CheckpointNode>> {
+    pub async fn list_checkpoint_branches(
+        &self,
+        agent_id: AgentId,
+    ) -> nephila_core::Result<Vec<CheckpointNode>> {
         let nodes = self
             .writer
             .execute(move |conn| {
@@ -174,145 +141,6 @@ impl CheckpointStore for SqliteStore {
             })
             .await?;
         Ok(nodes)
-    }
-
-    async fn search_l2(
-        &self,
-        agent_id: AgentId,
-        namespace: Option<&str>,
-        embedding: &[f32],
-        limit: usize,
-    ) -> nephila_core::Result<Vec<L2SearchResult>> {
-        let emb_bytes = f32_slice_to_bytes(embedding);
-        let ns = namespace.map(|s| s.to_string());
-        let results = self
-            .writer
-            .execute(move |conn| {
-                let (query, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match &ns {
-                    Some(ns_val) => (
-                        "SELECT c.id, c.content, c.tags, c.agent_id, c.namespace, v.distance
-                         FROM vec_l2_chunks v
-                         JOIN l2_chunks c ON c.id = v.chunk_id
-                         WHERE c.agent_id = ?1 AND c.namespace = ?2 AND v.embedding MATCH ?3
-                         ORDER BY v.distance
-                         LIMIT ?4"
-                            .to_string(),
-                        vec![
-                            Box::new(agent_id) as Box<dyn rusqlite::types::ToSql>,
-                            Box::new(ns_val.clone()),
-                            Box::new(emb_bytes.clone()),
-                            Box::new(limit as i64),
-                        ],
-                    ),
-                    None => (
-                        "SELECT c.id, c.content, c.tags, c.agent_id, c.namespace, v.distance
-                         FROM vec_l2_chunks v
-                         JOIN l2_chunks c ON c.id = v.chunk_id
-                         WHERE c.agent_id = ?1 AND v.embedding MATCH ?2
-                         ORDER BY v.distance
-                         LIMIT ?3"
-                            .to_string(),
-                        vec![
-                            Box::new(agent_id) as Box<dyn rusqlite::types::ToSql>,
-                            Box::new(emb_bytes.clone()),
-                            Box::new(limit as i64),
-                        ],
-                    ),
-                };
-
-                let mut stmt = conn.prepare(&query)?;
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                    params.iter().map(|p| p.as_ref()).collect();
-                let rows = stmt
-                    .query_map(param_refs.as_slice(), |row| {
-                        let id: EntryId = row.get(0)?;
-                        let content: String = row.get(1)?;
-                        let tags_json: String = row.get(2)?;
-                        let agent_id: AgentId = row.get(3)?;
-                        let namespace: String = row.get(4)?;
-                        let distance: f32 = row.get(5)?;
-                        let tags: Vec<String> =
-                            serde_json::from_str(&tags_json).unwrap_or_default();
-                        Ok(L2SearchResult {
-                            chunk: L2Chunk { id, content, tags },
-                            agent_id,
-                            namespace,
-                            score: 1.0 - distance,
-                        })
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await?;
-        Ok(results)
-    }
-
-    async fn search_l2_global(
-        &self,
-        namespace: Option<&str>,
-        embedding: &[f32],
-        limit: usize,
-    ) -> nephila_core::Result<Vec<L2SearchResult>> {
-        let emb_bytes = f32_slice_to_bytes(embedding);
-        let ns = namespace.map(|s| s.to_string());
-        let results = self
-            .writer
-            .execute(move |conn| {
-                let (query, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match &ns {
-                    Some(ns_val) => (
-                        "SELECT c.id, c.content, c.tags, c.agent_id, c.namespace, v.distance
-                         FROM vec_l2_chunks v
-                         JOIN l2_chunks c ON c.id = v.chunk_id
-                         WHERE c.namespace = ?1 AND v.embedding MATCH ?2
-                         ORDER BY v.distance
-                         LIMIT ?3"
-                            .to_string(),
-                        vec![
-                            Box::new(ns_val.clone()) as Box<dyn rusqlite::types::ToSql>,
-                            Box::new(emb_bytes.clone()),
-                            Box::new(limit as i64),
-                        ],
-                    ),
-                    None => (
-                        "SELECT c.id, c.content, c.tags, c.agent_id, c.namespace, v.distance
-                         FROM vec_l2_chunks v
-                         JOIN l2_chunks c ON c.id = v.chunk_id
-                         WHERE v.embedding MATCH ?1
-                         ORDER BY v.distance
-                         LIMIT ?2"
-                            .to_string(),
-                        vec![
-                            Box::new(emb_bytes.clone()) as Box<dyn rusqlite::types::ToSql>,
-                            Box::new(limit as i64),
-                        ],
-                    ),
-                };
-
-                let mut stmt = conn.prepare(&query)?;
-                let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                    params.iter().map(|p| p.as_ref()).collect();
-                let rows = stmt
-                    .query_map(param_refs.as_slice(), |row| {
-                        let id: EntryId = row.get(0)?;
-                        let content: String = row.get(1)?;
-                        let tags_json: String = row.get(2)?;
-                        let agent_id: AgentId = row.get(3)?;
-                        let namespace: String = row.get(4)?;
-                        let distance: f32 = row.get(5)?;
-                        let tags: Vec<String> =
-                            serde_json::from_str(&tags_json).unwrap_or_default();
-                        Ok(L2SearchResult {
-                            chunk: L2Chunk { id, content, tags },
-                            agent_id,
-                            namespace,
-                            score: 1.0 - distance,
-                        })
-                    })?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await?;
-        Ok(results)
     }
 }
 
@@ -364,9 +192,8 @@ fn load_node(
 mod tests {
     use crate::SqliteStore;
     use chrono::Utc;
-    use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk, ReducerKind};
-    use nephila_core::id::{AgentId, CheckpointId, EntryId, ObjectiveId};
-    use nephila_core::store::CheckpointStore;
+    use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, ReducerKind};
+    use nephila_core::id::{AgentId, CheckpointId, ObjectiveId};
     use std::collections::BTreeMap;
 
     fn make_channels() -> BTreeMap<String, ChannelEntry> {
@@ -441,8 +268,8 @@ mod tests {
         let node = make_node(agent_id, None);
         let node_id = node.id;
 
-        store.save(&node, &[], &[]).await.unwrap();
-        let fetched = store.get(node_id).await.unwrap().unwrap();
+        store.save_checkpoint_metadata(&node).await.unwrap();
+        let fetched = store.get_checkpoint(node_id).await.unwrap().unwrap();
         assert_eq!(fetched.id, node_id);
         assert_eq!(fetched.agent_id, agent_id);
         assert!(fetched.parent_id.is_none());
@@ -455,14 +282,17 @@ mod tests {
         let agent_id = make_agent(&store).await;
 
         let n1 = make_node(agent_id, None);
-        store.save(&n1, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&n1).await.unwrap();
 
-        // small delay to ensure ordering
         let mut n2 = make_node(agent_id, Some(n1.id));
         n2.created_at = Utc::now();
-        store.save(&n2, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&n2).await.unwrap();
 
-        let latest = store.get_latest(agent_id).await.unwrap().unwrap();
+        let latest = store
+            .get_latest_checkpoint(agent_id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(latest.id, n2.id);
     }
 
@@ -472,15 +302,15 @@ mod tests {
         let agent_id = make_agent(&store).await;
 
         let n1 = make_node(agent_id, None);
-        store.save(&n1, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&n1).await.unwrap();
 
         let n2 = make_node(agent_id, Some(n1.id));
-        store.save(&n2, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&n2).await.unwrap();
 
         let n3 = make_node(agent_id, Some(n2.id));
-        store.save(&n3, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&n3).await.unwrap();
 
-        let ancestry = store.get_ancestry(n3.id).await.unwrap();
+        let ancestry = store.get_checkpoint_ancestry(n3.id).await.unwrap();
         assert_eq!(ancestry.len(), 3);
         assert_eq!(ancestry[0].id, n1.id);
         assert_eq!(ancestry[1].id, n2.id);
@@ -493,17 +323,17 @@ mod tests {
         let agent_id = make_agent(&store).await;
 
         let root = make_node(agent_id, None);
-        store.save(&root, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&root).await.unwrap();
 
         let mut branch_a = make_node(agent_id, Some(root.id));
         branch_a.branch_label = Some("branch-a".into());
-        store.save(&branch_a, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&branch_a).await.unwrap();
 
         let mut branch_b = make_node(agent_id, Some(root.id));
         branch_b.branch_label = Some("branch-b".into());
-        store.save(&branch_b, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&branch_b).await.unwrap();
 
-        let leaves = store.list_branches(agent_id).await.unwrap();
+        let leaves = store.list_checkpoint_branches(agent_id).await.unwrap();
         assert_eq!(leaves.len(), 2);
         let ids: Vec<_> = leaves.iter().map(|n| n.id).collect();
         assert!(ids.contains(&branch_a.id));
@@ -516,15 +346,15 @@ mod tests {
         let agent_id = make_agent(&store).await;
 
         let root = make_node(agent_id, None);
-        store.save(&root, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&root).await.unwrap();
 
         let child1 = make_node(agent_id, Some(root.id));
-        store.save(&child1, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&child1).await.unwrap();
 
         let child2 = make_node(agent_id, Some(root.id));
-        store.save(&child2, &[], &[]).await.unwrap();
+        store.save_checkpoint_metadata(&child2).await.unwrap();
 
-        let children = store.get_children(root.id).await.unwrap();
+        let children = store.get_checkpoint_children(root.id).await.unwrap();
         assert_eq!(children.len(), 2);
     }
 
@@ -532,26 +362,7 @@ mod tests {
     async fn get_latest_no_checkpoints() {
         let store = SqliteStore::open_in_memory(384).unwrap();
         let agent_id = make_agent(&store).await;
-        let result = store.get_latest(agent_id).await.unwrap();
+        let result = store.get_latest_checkpoint(agent_id).await.unwrap();
         assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn save_with_l2_chunks() {
-        let store = SqliteStore::open_in_memory(384).unwrap();
-        let agent_id = make_agent(&store).await;
-
-        let node = make_node(agent_id, None);
-        let chunks = vec![L2Chunk {
-            id: EntryId::new(),
-            content: "detail chunk".into(),
-            tags: vec!["tag1".into()],
-        }];
-        let embeddings = vec![vec![0.1f32; 384]];
-
-        store.save(&node, &chunks, &embeddings).await.unwrap();
-
-        let fetched = store.get(node.id).await.unwrap().unwrap();
-        assert_eq!(fetched.id, node.id);
     }
 }

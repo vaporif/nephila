@@ -6,12 +6,7 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
-use nephila_core::embedding::EmbeddingProvider;
-use nephila_core::id::EntryId;
-use nephila_core::memory::{LifecycleState, Link, MemoryEntry};
-use nephila_core::store::{
-    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
-};
+use nephila_core::store::MemoryStore;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct SearchGraphParams {
@@ -37,6 +32,8 @@ pub struct SearchGraphResult {
     pub content: String,
     pub score: f32,
     pub tags: Vec<String>,
+    pub memory_type: String,
+    pub staleness: String,
 }
 
 pub struct SearchGraphTool;
@@ -55,49 +52,41 @@ impl ToolBase for SearchGraphTool {
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for SearchGraphTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for SearchGraphTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
-        let embedding = service
-            .embedder
-            .embed(&params.query)
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("embedding failed: {e}"), None))?;
+        let request = ferrex_core::RecallRequest {
+            query: params.query,
+            types: None,
+            entities: None,
+            namespace: None,
+            limit: Some(params.limit),
+            include_stale: Some(true),
+            include_invalidated: Some(false),
+            time_range: None,
+            validate_ids: None,
+            explain: false,
+        };
 
-        let search_results = service
-            .store
-            .search(&embedding, params.limit)
-            .await
-            .map_err(nephila_err)?;
+        let results = service.ferrex.recall(request).await.map_err(nephila_err)?;
 
-        let mut results = Vec::with_capacity(search_results.len());
-        for sr in search_results {
-            if let Err(e) = service.store.increment_access(sr.entry.id).await {
-                tracing::warn!(entry_id = %sr.entry.id, %e, "failed to increment access count");
-            }
-            results.push(SearchGraphResult {
-                entry_id: sr.entry.id.0.to_string(),
-                content: sr.entry.content,
-                score: sr.score,
-                tags: sr.entry.tags,
-            });
-        }
+        let output_results = results
+            .into_iter()
+            .map(|r| SearchGraphResult {
+                entry_id: r.memory.id.clone(),
+                content: r.memory.searchable_text(),
+                score: r.relevance_score,
+                tags: r.memory.entities.clone(),
+                memory_type: r.memory.memory_type.to_string(),
+                staleness: format!("{:?}", r.freshness_label).to_lowercase(),
+            })
+            .collect();
 
-        Ok(SearchGraphOutput { results })
+        Ok(SearchGraphOutput {
+            results: output_results,
+        })
     }
 }
 
@@ -105,24 +94,37 @@ where
 pub struct StoreMemoryParams {
     /// The agent ID storing the memory.
     pub agent_id: String,
-    /// The text content to memorize.
-    pub content: String,
+    /// The text content to memorize (for episodic/procedural).
+    pub content: Option<String>,
     /// Optional tags for categorization.
     #[serde(default)]
     pub tags: Vec<String>,
-    /// Importance score (0.0 to 1.0).
-    #[serde(default = "default_importance")]
-    pub importance: f32,
+    /// Entity names to link to this memory.
+    #[serde(default)]
+    pub entities: Vec<String>,
+    /// Memory type: episodic, semantic, or procedural.
+    pub memory_type: Option<String>,
+    /// Subject (for semantic triples).
+    pub subject: Option<String>,
+    /// Predicate (for semantic triples).
+    pub predicate: Option<String>,
+    /// Object (for semantic triples).
+    pub object: Option<String>,
+    /// Confidence score (0.0 to 1.0).
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
 }
 
-fn default_importance() -> f32 {
-    0.5
+fn default_confidence() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct StoreMemoryOutput {
     pub entry_id: String,
     pub stored: bool,
+    pub memory_type: Option<String>,
+    pub superseded: Vec<String>,
 }
 
 pub struct StoreMemoryTool;
@@ -137,73 +139,47 @@ impl ToolBase for StoreMemoryTool {
     }
 
     fn description() -> Option<Cow<'static, str>> {
-        Some("Store a new memory entry, embedding it and linking it to related entries.".into())
+        Some("Store a new memory entry with typed memory support.".into())
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for StoreMemoryTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for StoreMemoryTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
 
-        let embedding = service
-            .embedder
-            .embed(&params.content)
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("embedding failed: {e}"), None))?;
+        let memory_type = params
+            .memory_type
+            .as_deref()
+            .map(|t| {
+                t.parse::<ferrex_core::MemoryType>()
+                    .map_err(|e| ErrorData::invalid_params(e, None))
+            })
+            .transpose()?;
 
-        let entry = MemoryEntry {
-            id: EntryId::new(),
-            agent_id,
+        let request = ferrex_core::StoreRequest {
             content: params.content,
-            embedding: embedding.clone(),
-            tags: params.tags,
-            lifecycle_state: LifecycleState::Active,
-            importance: params.importance.clamp(0.0, 1.0),
-            access_count: 0,
-            created_at: chrono::Utc::now(),
+            memory_type,
+            subject: params.subject,
+            predicate: params.predicate,
+            object: params.object,
+            confidence: Some(params.confidence),
+            source: Some(format!("agent:{agent_id}")),
+            context: None,
+            entities: params.entities,
+            namespace: Some(agent_id.0.to_string()),
+            supersedes: None,
         };
 
-        let entry_id = service.store.store(entry).await.map_err(nephila_err)?;
-
-        let similar = service
-            .store
-            .find_similar(&embedding, 0.8)
-            .await
-            .map_err(nephila_err)?;
-        let links: Vec<Link> = similar
-            .into_iter()
-            .filter(|(id, _)| *id != entry_id)
-            .map(|(target_id, similarity_score)| Link {
-                target_id,
-                similarity_score,
-            })
-            .collect();
-        if !links.is_empty() {
-            service
-                .store
-                .update_links(entry_id, links)
-                .await
-                .map_err(nephila_err)?;
-        }
+        let response = service.ferrex.store(request).await.map_err(nephila_err)?;
 
         Ok(StoreMemoryOutput {
-            entry_id: entry_id.0.to_string(),
+            entry_id: response.id,
             stored: true,
+            memory_type: Some(response.memory_type),
+            superseded: response.superseded,
         })
     }
 }

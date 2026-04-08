@@ -13,13 +13,10 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 
 use nephila_core::command::OrchestratorCommand;
 use nephila_core::config::NephilaConfig;
-use nephila_core::embedding::EmbeddingProvider;
 use nephila_core::error::NephilaError;
 use nephila_core::event::BusEvent;
 use nephila_core::id::AgentId;
-use nephila_core::store::{
-    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
-};
+use nephila_store::{FerrexStore, SqliteStore};
 
 use crate::state::HitlRequest;
 use crate::tools::agent::{GetAgentStatusTool, GetEventLogTool, SpawnAgentTool};
@@ -46,29 +43,17 @@ pub fn parse_objective_id(s: &str) -> Result<nephila_core::id::ObjectiveId, rmcp
         .map_err(|e| ErrorData::invalid_params(format!("invalid objective_id: {e}"), None))
 }
 
-pub struct NephilaMcpServer<S, E> {
+pub struct NephilaMcpServer {
     tool_router: ToolRouter<Self>,
-    pub store: Arc<S>,
-    pub embedder: Arc<E>,
+    pub sqlite: Arc<SqliteStore>,
+    pub ferrex: Arc<FerrexStore>,
     pub event_tx: broadcast::Sender<BusEvent>,
     pub cmd_tx: mpsc::Sender<OrchestratorCommand>,
     pub hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
     pub config: NephilaConfig,
 }
 
-impl<S, E> NephilaMcpServer<S, E>
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl NephilaMcpServer {
     fn build_tool_router() -> ToolRouter<Self> {
         ToolRouter::new()
             .with_async_tool::<GetSessionCheckpointTool>()
@@ -88,8 +73,8 @@ where
     }
 
     pub fn new(
-        store: Arc<S>,
-        embedder: Arc<E>,
+        sqlite: Arc<SqliteStore>,
+        ferrex: Arc<FerrexStore>,
         event_tx: broadcast::Sender<BusEvent>,
         cmd_tx: mpsc::Sender<OrchestratorCommand>,
         hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
@@ -97,8 +82,8 @@ where
     ) -> Self {
         Self {
             tool_router: Self::build_tool_router(),
-            store,
-            embedder,
+            sqlite,
+            ferrex,
             event_tx,
             cmd_tx,
             hitl_requests,
@@ -107,19 +92,7 @@ where
     }
 }
 
-impl<S, E> ServerHandler for NephilaMcpServer<S, E>
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl ServerHandler for NephilaMcpServer {
     fn get_info(&self) -> ServerInfo {
         let capabilities = ServerCapabilities::builder()
             .enable_tools()

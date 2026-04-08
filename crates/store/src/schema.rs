@@ -44,19 +44,6 @@ CREATE INDEX IF NOT EXISTS idx_checkpoints_agent ON checkpoints(agent_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_parent ON checkpoints(parent_id);
 CREATE INDEX IF NOT EXISTS idx_checkpoints_created ON checkpoints(agent_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS l2_chunks (
-    id TEXT PRIMARY KEY,
-    checkpoint_id TEXT NOT NULL REFERENCES checkpoints(id),
-    agent_id TEXT NOT NULL,
-    namespace TEXT NOT NULL DEFAULT 'general',
-    content TEXT NOT NULL,
-    tags TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_l2_namespace ON l2_chunks(agent_id, namespace);
-CREATE INDEX IF NOT EXISTS idx_l2_checkpoint ON l2_chunks(checkpoint_id);
-
 CREATE TABLE IF NOT EXISTS interrupt_requests (
     id TEXT PRIMARY KEY,
     agent_id TEXT NOT NULL,
@@ -73,25 +60,6 @@ CREATE TABLE IF NOT EXISTS interrupt_requests (
 
 CREATE INDEX IF NOT EXISTS idx_interrupts_pending ON interrupt_requests(status) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS idx_interrupts_agent ON interrupt_requests(agent_id);
-
-CREATE TABLE IF NOT EXISTS memories (
-    id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL REFERENCES agents(id),
-    content TEXT NOT NULL,
-    embedding BLOB NOT NULL,
-    tags TEXT NOT NULL DEFAULT '[]',
-    lifecycle_state TEXT NOT NULL DEFAULT 'generated',
-    importance REAL NOT NULL DEFAULT 0.5,
-    access_count INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS memory_links (
-    source_id TEXT NOT NULL REFERENCES memories(id),
-    target_id TEXT NOT NULL REFERENCES memories(id),
-    similarity_score REAL NOT NULL,
-    PRIMARY KEY (source_id, target_id)
-);
 
 CREATE TABLE IF NOT EXISTS events (
     id TEXT PRIMARY KEY,
@@ -154,8 +122,6 @@ CREATE TABLE IF NOT EXISTS search_entries (
     metadata TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_memories_agent ON memories(agent_id);
-CREATE INDEX IF NOT EXISTS idx_memories_lifecycle ON memories(lifecycle_state);
 CREATE INDEX IF NOT EXISTS idx_events_agent_timestamp ON events(agent_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_objectives_parent ON objectives(parent_id);
 "#;
@@ -184,9 +150,7 @@ pub fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
 
 pub fn init_vec_tables(conn: &Connection, dimension: usize) -> Result<(), rusqlite::Error> {
     conn.execute_batch(&format!(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(embedding float[{dimension}]);
-         CREATE VIRTUAL TABLE IF NOT EXISTS vec_search_entries USING vec0(embedding float[{dimension}]);
-         CREATE VIRTUAL TABLE IF NOT EXISTS vec_l2_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[{dimension}]);"
+        "CREATE VIRTUAL TABLE IF NOT EXISTS vec_search_entries USING vec0(embedding float[{dimension}]);"
     ))?;
     Ok(())
 }
@@ -211,10 +175,7 @@ mod tests {
         assert!(tables.contains(&"agents".to_string()));
         assert!(tables.contains(&"objectives".to_string()));
         assert!(tables.contains(&"checkpoints".to_string()));
-        assert!(tables.contains(&"l2_chunks".to_string()));
         assert!(tables.contains(&"interrupt_requests".to_string()));
-        assert!(tables.contains(&"memories".to_string()));
-        assert!(tables.contains(&"memory_links".to_string()));
         assert!(tables.contains(&"events".to_string()));
         assert!(tables.contains(&"search_entries".to_string()));
         assert!(tables.contains(&"domain_events".to_string()));
@@ -231,16 +192,7 @@ mod tests {
 
         let count: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='vec_memories'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1);
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='vec_l2_chunks'",
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='vec_search_entries'",
                 [],
                 |row| row.get(0),
             )

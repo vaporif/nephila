@@ -3,9 +3,12 @@ use crate::checkpoint::{CheckpointNode, L2Chunk, L2SearchResult};
 use crate::directive::Directive;
 use crate::error::Result;
 use crate::event::McpEvent;
+use crate::ferrex_types::{
+    ForgetRequest, ForgetResponse, RecallRequest, RecallResult, ReflectRequest, ReflectResponse,
+    StoreRequest, StoreResponse,
+};
 use crate::id::*;
 use crate::interrupt::InterruptRequest;
-use crate::memory::{Embedding, LifecycleState, Link, MemoryEntry, SearchResult};
 use crate::objective::{NewObjective, ObjectiveNode, ObjectiveStatus, ObjectiveTree};
 use chrono::{DateTime, Utc};
 
@@ -54,12 +57,33 @@ pub trait AgentStore: Send + Sync {
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
+pub trait MemoryStore: Send + Sync {
+    fn store(
+        &self,
+        request: StoreRequest,
+    ) -> impl std::future::Future<Output = Result<StoreResponse>> + Send;
+
+    fn recall(
+        &self,
+        request: RecallRequest,
+    ) -> impl std::future::Future<Output = Result<Vec<RecallResult>>> + Send;
+
+    fn forget(
+        &self,
+        request: ForgetRequest,
+    ) -> impl std::future::Future<Output = Result<ForgetResponse>> + Send;
+
+    fn reflect(
+        &self,
+        request: ReflectRequest,
+    ) -> impl std::future::Future<Output = Result<ReflectResponse>> + Send;
+}
+
 pub trait CheckpointStore: Send + Sync {
     fn save(
         &self,
         node: &CheckpointNode,
         l2_chunks: &[L2Chunk],
-        l2_embeddings: &[Embedding],
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 
     fn get(
@@ -91,61 +115,16 @@ pub trait CheckpointStore: Send + Sync {
         &self,
         agent_id: AgentId,
         namespace: Option<&str>,
-        embedding: &[f32],
+        query: &str,
         limit: usize,
     ) -> impl std::future::Future<Output = Result<Vec<L2SearchResult>>> + Send;
 
     fn search_l2_global(
         &self,
         namespace: Option<&str>,
-        embedding: &[f32],
+        query: &str,
         limit: usize,
     ) -> impl std::future::Future<Output = Result<Vec<L2SearchResult>>> + Send;
-}
-
-pub trait MemoryStore: Send + Sync {
-    fn store(
-        &self,
-        entry: MemoryEntry,
-    ) -> impl std::future::Future<Output = Result<EntryId>> + Send;
-
-    fn get(
-        &self,
-        id: EntryId,
-    ) -> impl std::future::Future<Output = Result<Option<MemoryEntry>>> + Send;
-
-    fn search(
-        &self,
-        query: &Embedding,
-        limit: usize,
-    ) -> impl std::future::Future<Output = Result<Vec<SearchResult>>> + Send;
-
-    fn find_similar(
-        &self,
-        embedding: &Embedding,
-        threshold: f32,
-    ) -> impl std::future::Future<Output = Result<Vec<(EntryId, f32)>>> + Send;
-
-    fn update_links(
-        &self,
-        id: EntryId,
-        links: Vec<Link>,
-    ) -> impl std::future::Future<Output = Result<()>> + Send;
-
-    fn get_linked(
-        &self,
-        id: EntryId,
-        depth: usize,
-    ) -> impl std::future::Future<Output = Result<Vec<MemoryEntry>>> + Send;
-
-    fn transition_state(
-        &self,
-        id: EntryId,
-        new_state: LifecycleState,
-    ) -> impl std::future::Future<Output = Result<()>> + Send;
-
-    fn increment_access(&self, id: EntryId)
-    -> impl std::future::Future<Output = Result<()>> + Send;
 }
 
 pub trait ObjectiveStore: Send + Sync {

@@ -10,12 +10,9 @@ use tokio_util::sync::CancellationToken;
 
 use nephila_core::command::OrchestratorCommand;
 use nephila_core::config::NephilaConfig;
-use nephila_core::embedding::EmbeddingProvider;
 use nephila_core::event::BusEvent;
 use nephila_core::id::AgentId;
-use nephila_core::store::{
-    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
-};
+use nephila_store::{FerrexStore, SqliteStore};
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
     tower::{StreamableHttpServerConfig, StreamableHttpService},
@@ -24,27 +21,15 @@ use rmcp::transport::streamable_http_server::{
 use crate::server::NephilaMcpServer;
 use crate::state::HitlRequest;
 
-pub async fn serve<S, E>(
-    store: Arc<S>,
-    embedder: Arc<E>,
+pub async fn serve(
+    sqlite: Arc<SqliteStore>,
+    ferrex: Arc<FerrexStore>,
     event_tx: broadcast::Sender<BusEvent>,
     cmd_tx: mpsc::Sender<OrchestratorCommand>,
     hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
     config: NephilaConfig,
     cancellation_token: CancellationToken,
-) -> std::io::Result<(JoinHandle<()>, SocketAddr)>
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+) -> std::io::Result<(JoinHandle<()>, SocketAddr)> {
     let ip: IpAddr = config
         .mcp
         .host
@@ -60,8 +45,8 @@ where
     let service = StreamableHttpService::new(
         move || {
             Ok(NephilaMcpServer::new(
-                store.clone(),
-                embedder.clone(),
+                sqlite.clone(),
+                ferrex.clone(),
                 event_tx.clone(),
                 cmd_tx.clone(),
                 hitl_requests.clone(),

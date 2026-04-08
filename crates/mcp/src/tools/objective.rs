@@ -6,12 +6,9 @@ use rmcp::schemars;
 use serde::{Deserialize, Serialize};
 
 use crate::server::{NephilaMcpServer, nephila_err, parse_objective_id};
-use nephila_core::embedding::EmbeddingProvider;
 use nephila_core::event::BusEvent;
 use nephila_core::objective::ObjectiveStatus;
-use nephila_core::store::{
-    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
-};
+use nephila_core::store::ObjectiveStore;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct GetObjectiveTreeParams {
@@ -41,26 +38,18 @@ impl ToolBase for GetObjectiveTreeTool {
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for GetObjectiveTreeTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for GetObjectiveTreeTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let root_id = parse_objective_id(&params.root_id)?;
 
-        let tree = service.store.get_tree(root_id).await.map_err(nephila_err)?;
+        let tree = service
+            .sqlite
+            .get_tree(root_id)
+            .await
+            .map_err(nephila_err)?;
         let tree_json = serde_json::to_string(&tree)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
@@ -97,21 +86,9 @@ impl ToolBase for UpdateObjectiveTool {
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for UpdateObjectiveTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for UpdateObjectiveTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let objective_id = parse_objective_id(&params.objective_id)?;
@@ -127,7 +104,7 @@ where
         })?;
 
         service
-            .store
+            .sqlite
             .update_status(objective_id, status)
             .await
             .map_err(nephila_err)?;

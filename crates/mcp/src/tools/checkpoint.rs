@@ -9,16 +9,12 @@ use serde::{Deserialize, Serialize};
 use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
 use nephila_core::channel::{merge_channels, validate_channels};
 use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk};
-use nephila_core::embedding::EmbeddingProvider;
 use nephila_core::event::BusEvent;
 use nephila_core::id::CheckpointId;
-use nephila_core::store::{
-    AgentStore, CheckpointStore, InterruptStore, McpEventLog, MemoryStore, ObjectiveStore,
-};
+use nephila_core::store::{AgentStore, CheckpointStore, InterruptStore};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct GetSessionCheckpointParams {
-    /// The agent ID requesting the checkpoint (hex UUID prefix or full UUID).
     pub agent_id: String,
 }
 
@@ -45,33 +41,20 @@ impl ToolBase for GetSessionCheckpointTool {
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for GetSessionCheckpointTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for GetSessionCheckpointTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
 
-        // Check if agent has a restore_checkpoint_id set (for forks or explicit restore)
-        let agent = AgentStore::get(service.store.as_ref(), agent_id)
-            .await
-            .map_err(nephila_err)?;
+        let agent = service.sqlite.get(agent_id).await.map_err(nephila_err)?;
 
         let checkpoint_id = match agent.and_then(|a| a.restore_checkpoint_id) {
             Some(id) => Some(id),
-            None => CheckpointStore::get_latest(service.store.as_ref(), agent_id)
+            None => service
+                .ferrex
+                .get_latest(agent_id)
                 .await
                 .map_err(nephila_err)?
                 .map(|n| n.id),
@@ -88,7 +71,9 @@ where
             }
         };
 
-        let ancestry = CheckpointStore::get_ancestry(service.store.as_ref(), checkpoint_id)
+        let ancestry = service
+            .ferrex
+            .get_ancestry(checkpoint_id)
             .await
             .map_err(nephila_err)?;
 
@@ -104,10 +89,11 @@ where
         let channels_value = serde_json::to_value(&merged)
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
 
-        // Check for interrupt response
         let interrupt = if let Some(last) = ancestry.last() {
             if last.interrupt.is_some() {
-                let pending = InterruptStore::get_pending(service.store.as_ref(), agent_id)
+                let pending = service
+                    .sqlite
+                    .get_pending(agent_id)
                     .await
                     .map_err(nephila_err)?;
                 pending.map(|req| {
@@ -135,13 +121,9 @@ where
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct SerializeAndPersistParams {
     pub agent_id: String,
-    /// Channel map as JSON: {"objectives": {"reducer": "overwrite", "value": [...]}, ...}
     pub channels: String,
-    /// Optional L2 detail chunks as JSON array.
     pub l2_json: Option<String>,
-    /// Optional branch label for this checkpoint.
     pub branch_label: Option<String>,
-    /// Optional L2 namespace (defaults to "general").
     pub l2_namespace: Option<String>,
 }
 
@@ -167,21 +149,9 @@ impl ToolBase for SerializeAndPersistTool {
     }
 }
 
-impl<S, E> AsyncTool<NephilaMcpServer<S, E>> for SerializeAndPersistTool
-where
-    S: AgentStore
-        + CheckpointStore
-        + MemoryStore
-        + ObjectiveStore
-        + McpEventLog
-        + InterruptStore
-        + Send
-        + Sync
-        + 'static,
-    E: EmbeddingProvider + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for SerializeAndPersistTool {
     async fn invoke(
-        service: &NephilaMcpServer<S, E>,
+        service: &NephilaMcpServer,
         params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
         let agent_id = parse_agent_id(&params.agent_id)?;
@@ -199,7 +169,9 @@ where
             None => vec![],
         };
 
-        let parent_id = CheckpointStore::get_latest(service.store.as_ref(), agent_id)
+        let parent_id = service
+            .ferrex
+            .get_latest(agent_id)
             .await
             .map_err(nephila_err)?
             .map(|n| n.id);
@@ -215,34 +187,28 @@ where
             created_at: chrono::Utc::now(),
         };
 
-        let l2_embeddings =
-            if l2_chunks.is_empty() {
-                vec![]
-            } else {
-                let texts: Vec<&str> = l2_chunks.iter().map(|c| c.content.as_str()).collect();
-                service.embedder.embed_batch(&texts).await.map_err(|e| {
-                    ErrorData::internal_error(format!("embedding failed: {e}"), None)
-                })?
-            };
-
         let checkpoint_id = node.id;
-        CheckpointStore::save(service.store.as_ref(), &node, &l2_chunks, &l2_embeddings)
+
+        service
+            .ferrex
+            .save(&node, &l2_chunks)
             .await
             .map_err(nephila_err)?;
 
-        AgentStore::set_checkpoint_id(service.store.as_ref(), agent_id, checkpoint_id)
+        service
+            .sqlite
+            .set_checkpoint_id(agent_id, checkpoint_id)
             .await
             .map_err(nephila_err)?;
 
-        // Clear restore_checkpoint_id if it was set
-        let agent = AgentStore::get(service.store.as_ref(), agent_id)
-            .await
-            .map_err(nephila_err)?;
+        let agent = service.sqlite.get(agent_id).await.map_err(nephila_err)?;
         if agent
             .map(|a| a.restore_checkpoint_id.is_some())
             .unwrap_or(false)
         {
-            AgentStore::set_restore_checkpoint(service.store.as_ref(), agent_id, None)
+            service
+                .sqlite
+                .set_restore_checkpoint(agent_id, None)
                 .await
                 .map_err(nephila_err)?;
         }

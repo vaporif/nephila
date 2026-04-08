@@ -13,6 +13,10 @@ categories.workspace = true
 [dependencies]
 nephila-core = { workspace = true, features = ["rusqlite"] }
 nephila-eventsourcing = { workspace = true }
+ferrex-core = { workspace = true }
+ferrex-store = { workspace = true }
+ferrex-embed = { workspace = true }
+qdrant-client = { workspace = true }
 rusqlite = { workspace = true }
 sqlite-vec = { workspace = true }
 tokio = { workspace = true }

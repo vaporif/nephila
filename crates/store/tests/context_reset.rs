@@ -1,8 +1,7 @@
 use nephila_core::agent::{Agent, AgentState, SpawnOrigin};
-use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk, ReducerKind};
+use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, ReducerKind};
 use nephila_core::directive::Directive;
 use nephila_core::id::*;
-use nephila_core::memory::{Embedding, LifecycleState, MemoryEntry};
 use nephila_core::objective::{NewObjective, ObjectiveStatus};
 use nephila_core::store::*;
 use nephila_store::SqliteStore;
@@ -10,10 +9,6 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 const DIM: usize = 8;
-
-fn make_embedding(val: f32) -> Vec<f32> {
-    vec![val; DIM]
-}
 
 fn make_channels() -> BTreeMap<String, ChannelEntry> {
     BTreeMap::from([
@@ -99,20 +94,6 @@ async fn test_full_context_reset_loop() {
         .await
         .unwrap();
 
-    let l2_chunks = vec![
-        L2Chunk {
-            id: EntryId::new(),
-            content: "Created auth middleware with JWT parsing".into(),
-            tags: vec!["auth".into(), "middleware".into()],
-        },
-        L2Chunk {
-            id: EntryId::new(),
-            content: "Added protected route decorator for API endpoints".into(),
-            tags: vec!["auth".into(), "routes".into()],
-        },
-    ];
-    let l2_embeddings: Vec<Embedding> = vec![make_embedding(0.2), make_embedding(0.3)];
-
     let node = CheckpointNode {
         id: CheckpointId::new(),
         agent_id,
@@ -125,27 +106,10 @@ async fn test_full_context_reset_loop() {
     };
     let node_id = node.id;
 
-    CheckpointStore::save(&store, &node, &l2_chunks, &l2_embeddings)
-        .await
-        .unwrap();
+    store.save_checkpoint_metadata(&node).await.unwrap();
     AgentStore::set_checkpoint_id(&store, agent_id, node_id)
         .await
         .unwrap();
-
-    for (chunk, emb) in l2_chunks.iter().zip(l2_embeddings.iter()) {
-        let entry = MemoryEntry {
-            id: chunk.id,
-            agent_id,
-            content: chunk.content.clone(),
-            embedding: emb.clone(),
-            tags: chunk.tags.clone(),
-            lifecycle_state: LifecycleState::Generated,
-            importance: 0.5,
-            access_count: 0,
-            created_at: chrono::Utc::now(),
-        };
-        MemoryStore::store(&store, entry).await.unwrap();
-    }
 
     AgentStore::update_state(&store, agent_id, AgentState::Exited)
         .await
@@ -165,19 +129,14 @@ async fn test_full_context_reset_loop() {
     new_agent.restore_checkpoint_id = Some(node_id);
     AgentStore::register(&store, new_agent).await.unwrap();
 
-    let checkpoint = CheckpointStore::get_latest(&store, agent_id)
+    let checkpoint = store
+        .get_latest_checkpoint(agent_id)
         .await
         .unwrap()
         .expect("checkpoint should exist");
     assert_eq!(checkpoint.id, node_id);
     assert!(checkpoint.channels.contains_key("objectives"));
     assert!(checkpoint.channels.contains_key("progress_summary"));
-
-    let query_embedding = make_embedding(0.2);
-    let results = MemoryStore::search(&store, &query_embedding, 5)
-        .await
-        .unwrap();
-    assert!(!results.is_empty(), "memory search should return results");
 
     AgentStore::update_state(&store, new_agent_id, AgentState::Active)
         .await
@@ -230,7 +189,7 @@ async fn test_checkpoint_tree_ancestry() {
         interrupt: None,
         created_at: chrono::Utc::now(),
     };
-    CheckpointStore::save(&store, &n1, &[], &[]).await.unwrap();
+    store.save_checkpoint_metadata(&n1).await.unwrap();
 
     let n2 = CheckpointNode {
         id: CheckpointId::new(),
@@ -242,15 +201,16 @@ async fn test_checkpoint_tree_ancestry() {
         interrupt: None,
         created_at: chrono::Utc::now(),
     };
-    CheckpointStore::save(&store, &n2, &[], &[]).await.unwrap();
+    store.save_checkpoint_metadata(&n2).await.unwrap();
 
-    let latest = CheckpointStore::get_latest(&store, agent_id)
+    let latest = store
+        .get_latest_checkpoint(agent_id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(latest.id, n2.id);
 
-    let ancestry = CheckpointStore::get_ancestry(&store, n2.id).await.unwrap();
+    let ancestry = store.get_checkpoint_ancestry(n2.id).await.unwrap();
     assert_eq!(ancestry.len(), 2);
     assert_eq!(ancestry[0].id, n1.id);
     assert_eq!(ancestry[1].id, n2.id);

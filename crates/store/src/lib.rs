@@ -2,14 +2,16 @@ pub mod agent;
 pub mod checkpoint;
 pub mod domain_event;
 pub mod event;
+pub mod ferrex_store;
 pub mod interrupt;
-pub mod memory;
 pub mod objective;
 pub mod schema;
 pub mod search_provider;
 pub mod tracing_store;
 pub(crate) mod util;
 pub mod writer;
+
+pub use ferrex_store::FerrexStore;
 
 #[cfg(test)]
 pub(crate) mod test_util;
