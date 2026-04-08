@@ -1,10 +1,19 @@
 [package]
-name = "meridian-mcp"
+name = "nephila-mcp"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-meridian-core = { workspace = true }
+nephila-core = { workspace = true }
+nephila-store = { workspace = true }
+ferrex-core = { workspace = true }
 rmcp = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
@@ -15,3 +24,4 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 schemars = { workspace = true }
+tokio-util = { workspace = true }

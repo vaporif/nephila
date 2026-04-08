@@ -1,6 +1,6 @@
 use chrono::Utc;
-use meridian_core::id::AgentId;
-use meridian_core::ObjectiveId;
+use nephila_core::ObjectiveId;
+use nephila_core::id::AgentId;
 
 use crate::SqliteStore;
 

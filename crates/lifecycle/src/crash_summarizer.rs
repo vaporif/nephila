@@ -1,47 +1,48 @@
-use meridian_core::checkpoint::{L0State, L2Chunk, ObjectiveSnapshot};
-use meridian_core::error::Result;
-use meridian_core::event::{EventType, McpEvent};
-use meridian_core::id::EntryId;
-use meridian_core::objective::{ObjectiveNode, ObjectiveTree};
-use meridian_core::summarizer::Summarizer;
+use nephila_core::checkpoint::{ChannelEntry, L2Chunk, ReducerKind};
+use nephila_core::error::Result;
+use nephila_core::event::{EventType, McpEvent};
+use nephila_core::id::EntryId;
+use nephila_core::objective::{ObjectiveNode, ObjectiveTree};
+use nephila_core::summarizer::Summarizer;
+use std::collections::BTreeMap;
 
-/// Generates checkpoint layers from MCP logs without an LLM — used after crashes.
+/// Generates checkpoint channels from MCP logs without an LLM — used after crashes.
 #[derive(Default)]
 pub struct CrashSummarizer;
 
 impl CrashSummarizer {
-    fn collect_snapshots(node: &ObjectiveNode, out: &mut Vec<ObjectiveSnapshot>) {
-        out.push(ObjectiveSnapshot {
-            id: node.id,
-            description: node.description.clone(),
-            status: node.status.to_string(),
-        });
+    fn collect_objective_values(node: &ObjectiveNode, out: &mut Vec<serde_json::Value>) {
+        out.push(serde_json::json!({
+            "id": node.id,
+            "description": node.description,
+            "status": node.status.to_string(),
+        }));
         for child in &node.children {
-            Self::collect_snapshots(child, out);
+            Self::collect_objective_values(child, out);
         }
     }
 }
 
 impl Summarizer for CrashSummarizer {
-    async fn generate_l0(
-        &self,
-        _mcp_log: &[McpEvent],
-        objectives: &ObjectiveTree,
-    ) -> Result<L0State> {
-        let mut snapshots = Vec::new();
-        Self::collect_snapshots(&objectives.root, &mut snapshots);
-
-        Ok(L0State {
-            objectives: snapshots,
-            next_steps: vec!["Resume from last checkpoint".to_owned()],
-        })
-    }
-
-    async fn generate_l1(
+    async fn generate_channels(
         &self,
         mcp_log: &[McpEvent],
-        _objectives: &ObjectiveTree,
-    ) -> Result<String> {
+        objectives: &ObjectiveTree,
+    ) -> Result<BTreeMap<String, ChannelEntry>> {
+        let mut channels = BTreeMap::new();
+
+        // objectives channel (overwrite reducer)
+        let mut obj_values = Vec::new();
+        Self::collect_objective_values(&objectives.root, &mut obj_values);
+        channels.insert(
+            "objectives".to_owned(),
+            ChannelEntry {
+                reducer: ReducerKind::Overwrite,
+                value: serde_json::Value::Array(obj_values),
+            },
+        );
+
+        // progress_summary channel (overwrite reducer)
         let filtered: Vec<&McpEvent> = mcp_log
             .iter()
             .filter(|e| matches!(e.event_type, EventType::ToolCall | EventType::ToolResult))
@@ -51,7 +52,6 @@ impl Summarizer for CrashSummarizer {
 
         let mut lines = Vec::with_capacity(recent.len() + 1);
         lines.push("Recent tool activity:".to_owned());
-
         for event in recent {
             let tool_name = event
                 .content
@@ -63,10 +63,38 @@ impl Summarizer for CrashSummarizer {
                 EventType::ToolResult => "result",
                 _ => "event",
             };
-            lines.push(format!("- [{event_label}] {tool_name} at {}", event.timestamp));
+            lines.push(format!(
+                "- [{event_label}] {tool_name} at {}",
+                event.timestamp
+            ));
         }
+        channels.insert(
+            "progress_summary".to_owned(),
+            ChannelEntry {
+                reducer: ReducerKind::Overwrite,
+                value: serde_json::Value::String(lines.join("\n")),
+            },
+        );
 
-        Ok(lines.join("\n"))
+        // decisions channel (append reducer, starts empty)
+        channels.insert(
+            "decisions".to_owned(),
+            ChannelEntry {
+                reducer: ReducerKind::Append,
+                value: serde_json::Value::Array(vec![]),
+            },
+        );
+
+        // blockers channel (append reducer, starts empty)
+        channels.insert(
+            "blockers".to_owned(),
+            ChannelEntry {
+                reducer: ReducerKind::Append,
+                value: serde_json::Value::Array(vec![]),
+            },
+        );
+
+        Ok(channels)
     }
 
     async fn generate_l2(&self, mcp_log: &[McpEvent]) -> Result<Vec<L2Chunk>> {
@@ -112,8 +140,8 @@ impl Summarizer for CrashSummarizer {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use meridian_core::id::{AgentId, ObjectiveId};
-    use meridian_core::objective::{ObjectiveNode, ObjectiveStatus, ObjectiveTree};
+    use nephila_core::id::{AgentId, ObjectiveId};
+    use nephila_core::objective::{ObjectiveNode, ObjectiveStatus, ObjectiveTree};
 
     fn make_event(event_type: EventType, tool: &str) -> McpEvent {
         McpEvent {
@@ -143,7 +171,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_l1_with_mock_log() {
+    async fn generate_channels_with_mock_log() {
         let summarizer = CrashSummarizer;
         let events = vec![
             make_event(EventType::ToolCall, "read_file"),
@@ -154,10 +182,27 @@ mod tests {
         ];
         let tree = make_tree();
 
-        let summary = summarizer.generate_l1(&events, &tree).await.unwrap();
-        assert!(!summary.is_empty());
+        let channels = summarizer.generate_channels(&events, &tree).await.unwrap();
+
+        // Check all required channels are present
+        assert!(channels.contains_key("objectives"));
+        assert!(channels.contains_key("progress_summary"));
+        assert!(channels.contains_key("decisions"));
+        assert!(channels.contains_key("blockers"));
+
+        // progress_summary should contain tool names but not ignored events
+        let summary = channels["progress_summary"].value.as_str().unwrap();
         assert!(summary.contains("read_file"));
         assert!(summary.contains("write_file"));
         assert!(!summary.contains("ignored"));
+
+        // objectives should be an array with the root objective
+        let objs = channels["objectives"].value.as_array().unwrap();
+        assert_eq!(objs.len(), 1);
+        assert_eq!(objs[0]["description"], "Root objective");
+
+        // decisions and blockers should be empty arrays
+        assert_eq!(channels["decisions"].value.as_array().unwrap().len(), 0);
+        assert_eq!(channels["blockers"].value.as_array().unwrap().len(), 0);
     }
 }

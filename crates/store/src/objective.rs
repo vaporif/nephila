@@ -1,13 +1,13 @@
-use crate::util::parse_rfc3339;
 use crate::SqliteStore;
+use crate::util::parse_rfc3339;
 use chrono::Utc;
-use meridian_core::id::{AgentId, ObjectiveId};
-use meridian_core::objective::{NewObjective, ObjectiveNode, ObjectiveStatus, ObjectiveTree};
-use meridian_core::store::ObjectiveStore;
+use nephila_core::id::{AgentId, ObjectiveId};
+use nephila_core::objective::{NewObjective, ObjectiveNode, ObjectiveStatus, ObjectiveTree};
+use nephila_core::store::ObjectiveStore;
 use std::collections::HashMap;
 
 impl ObjectiveStore for SqliteStore {
-    async fn create(&self, objective: NewObjective) -> meridian_core::Result<ObjectiveId> {
+    async fn create(&self, objective: NewObjective) -> nephila_core::Result<ObjectiveId> {
         let id = ObjectiveId::new();
         let now = Utc::now().to_rfc3339();
         self.writer
@@ -35,7 +35,7 @@ impl ObjectiveStore for SqliteStore {
         &self,
         id: ObjectiveId,
         status: ObjectiveStatus,
-    ) -> meridian_core::Result<()> {
+    ) -> nephila_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
@@ -49,14 +49,11 @@ impl ObjectiveStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::ObjectiveNotFound(id))?;
+            .map_err(|_| nephila_core::NephilaError::ObjectiveNotFound(id))?;
         Ok(())
     }
 
-    async fn get_node(
-        &self,
-        id: ObjectiveId,
-    ) -> meridian_core::Result<Option<ObjectiveNode>> {
+    async fn get_node(&self, id: ObjectiveId) -> nephila_core::Result<Option<ObjectiveNode>> {
         let node = self
             .writer
             .execute(move |conn| {
@@ -75,10 +72,7 @@ impl ObjectiveStore for SqliteStore {
         Ok(node)
     }
 
-    async fn get_tree(
-        &self,
-        root_id: ObjectiveId,
-    ) -> meridian_core::Result<ObjectiveTree> {
+    async fn get_tree(&self, root_id: ObjectiveId) -> nephila_core::Result<ObjectiveTree> {
         let tree = self
             .writer
             .execute(move |conn| {
@@ -105,7 +99,9 @@ impl ObjectiveStore for SqliteStore {
 
         match tree {
             Some(root) => Ok(ObjectiveTree { root }),
-            None => Err(crate::StoreError::NotFound("objective root not found".to_string()))?,
+            None => Err(crate::StoreError::NotFound(
+                "objective root not found".to_string(),
+            ))?,
         }
     }
 
@@ -113,17 +109,13 @@ impl ObjectiveStore for SqliteStore {
         &self,
         objective_id: ObjectiveId,
         agent_id: AgentId,
-    ) -> meridian_core::Result<()> {
+    ) -> nephila_core::Result<()> {
         let now = Utc::now().to_rfc3339();
         self.writer
             .execute(move |conn| {
                 let rows = conn.execute(
                     "UPDATE objectives SET agent_id = ?1, updated_at = ?2 WHERE id = ?3",
-                    rusqlite::params![
-                        agent_id,
-                        now,
-                        objective_id
-                    ],
+                    rusqlite::params![agent_id, now, objective_id],
                 )?;
                 if rows == 0 {
                     return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -131,7 +123,7 @@ impl ObjectiveStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|_| meridian_core::MeridianError::ObjectiveNotFound(objective_id))?;
+            .map_err(|_| nephila_core::NephilaError::ObjectiveNotFound(objective_id))?;
         Ok(())
     }
 }
@@ -147,7 +139,9 @@ fn row_to_node(row: &rusqlite::Row) -> Result<ObjectiveNode, rusqlite::Error> {
         parent_id: row.get(1)?,
         agent_id: row.get(2)?,
         description,
-        status: status_str.parse::<ObjectiveStatus>().unwrap_or(ObjectiveStatus::Pending),
+        status: status_str
+            .parse::<ObjectiveStatus>()
+            .unwrap_or(ObjectiveStatus::Pending),
         children: Vec::new(),
         created_at: parse_rfc3339(&created_str)?,
         updated_at: parse_rfc3339(&updated_str)?,
@@ -189,8 +183,8 @@ fn build_subtree(
 #[cfg(test)]
 mod tests {
     use crate::SqliteStore;
-    use meridian_core::objective::{NewObjective, ObjectiveStatus};
-    use meridian_core::store::ObjectiveStore;
+    use nephila_core::objective::{NewObjective, ObjectiveStatus};
+    use nephila_core::store::ObjectiveStore;
 
     #[tokio::test]
     async fn create_and_get() {
@@ -277,17 +271,15 @@ mod tests {
     #[tokio::test]
     async fn update_status_nonexistent_errors() {
         let store = SqliteStore::open_in_memory(384).unwrap();
-        let fake_id = meridian_core::ObjectiveId::new();
-        let result = store
-            .update_status(fake_id, ObjectiveStatus::Done)
-            .await;
+        let fake_id = nephila_core::ObjectiveId::new();
+        let result = store.update_status(fake_id, ObjectiveStatus::Done).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
     async fn get_node_nonexistent_returns_none() {
         let store = SqliteStore::open_in_memory(384).unwrap();
-        let fake_id = meridian_core::ObjectiveId::new();
+        let fake_id = nephila_core::ObjectiveId::new();
         let result = store.get_node(fake_id).await.unwrap();
         assert!(result.is_none());
     }
@@ -295,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn get_tree_nonexistent_root_errors() {
         let store = SqliteStore::open_in_memory(384).unwrap();
-        let fake_id = meridian_core::ObjectiveId::new();
+        let fake_id = nephila_core::ObjectiveId::new();
         let result = store.get_tree(fake_id).await;
         assert!(result.is_err());
     }

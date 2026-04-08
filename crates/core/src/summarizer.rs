@@ -1,21 +1,16 @@
-use crate::checkpoint::{L0State, L2Chunk};
+use crate::checkpoint::{ChannelEntry, L2Chunk};
 use crate::error::Result;
 use crate::event::McpEvent;
 use crate::objective::ObjectiveTree;
+use std::collections::BTreeMap;
 
-/// Fallback checkpoint generation when Claude doesn't provide layer content.
+/// Fallback checkpoint generation when the agent doesn't provide channel content.
 pub trait Summarizer: Send + Sync {
-    fn generate_l0(
+    fn generate_channels(
         &self,
         mcp_log: &[McpEvent],
         objectives: &ObjectiveTree,
-    ) -> impl std::future::Future<Output = Result<L0State>> + Send;
-
-    fn generate_l1(
-        &self,
-        mcp_log: &[McpEvent],
-        objectives: &ObjectiveTree,
-    ) -> impl std::future::Future<Output = Result<String>> + Send;
+    ) -> impl std::future::Future<Output = Result<BTreeMap<String, ChannelEntry>>> + Send;
 
     fn generate_l2(
         &self,

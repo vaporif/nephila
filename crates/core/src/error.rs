@@ -1,7 +1,7 @@
 use crate::id::{AgentId, EntryId, ObjectiveId};
 
 #[derive(Debug, thiserror::Error)]
-pub enum MeridianError {
+pub enum NephilaError {
     #[error("agent not found: {0}")]
     AgentNotFound(AgentId),
 
@@ -26,6 +26,9 @@ pub enum MeridianError {
     #[error("process error: {0}")]
     Process(String),
 
+    #[error("connector error: {0}")]
+    Connector(String),
+
     #[error("serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
 
@@ -36,4 +39,4 @@ pub enum MeridianError {
     Shutdown,
 }
 
-pub type Result<T> = std::result::Result<T, MeridianError>;
+pub type Result<T> = std::result::Result<T, NephilaError>;

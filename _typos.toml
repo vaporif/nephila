@@ -1,1 +1,4 @@
 [default.extend-words]
+ratatui = "ratatui"
+magentic = "magentic"
+OT = "OT"

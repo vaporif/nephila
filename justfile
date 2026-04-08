@@ -35,10 +35,10 @@ fmt-toml:
     taplo fmt
 
 check-nix-fmt:
-    alejandra --check flake.nix
+    alejandra --check flake.nix nix/
 
 fmt-nix:
-    alejandra flake.nix
+    alejandra flake.nix nix/
 
 check-typos:
     typos
@@ -47,4 +47,4 @@ lint-actions:
     actionlint
 
 run *args:
-    cargo run -p meridian -- {{args}}
+    cargo run -p nephila -- {{args}}

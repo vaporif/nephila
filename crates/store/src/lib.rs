@@ -1,12 +1,17 @@
-pub mod schema;
-pub mod writer;
-pub(crate) mod util;
 pub mod agent;
-pub mod objective;
 pub mod checkpoint;
-pub mod memory;
+pub mod domain_event;
 pub mod event;
-pub mod hitl;
+pub mod ferrex_store;
+pub mod interrupt;
+pub mod objective;
+pub mod schema;
+pub mod search_provider;
+pub mod tracing_store;
+pub(crate) mod util;
+pub mod writer;
+
+pub use ferrex_store::FerrexStore;
 
 #[cfg(test)]
 pub(crate) mod test_util;
@@ -28,9 +33,9 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
 }
 
-impl From<StoreError> for meridian_core::MeridianError {
+impl From<StoreError> for nephila_core::NephilaError {
     fn from(e: StoreError) -> Self {
-        meridian_core::MeridianError::Storage(e.to_string())
+        nephila_core::NephilaError::Storage(e.to_string())
     }
 }
 

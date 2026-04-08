@@ -1,9 +1,7 @@
-pub mod token_tracker;
-pub mod process;
-pub mod supervisor;
 pub mod crash_summarizer;
+pub mod supervisor;
+pub mod token_tracker;
 
-pub use token_tracker::{TokenTracker, TokenBand};
-pub use process::{ClaudeProcess, SpawnConfig};
-pub use supervisor::RestartTracker;
 pub use crash_summarizer::CrashSummarizer;
+pub use supervisor::RestartTracker;
+pub use token_tracker::{TokenBand, TokenTracker};

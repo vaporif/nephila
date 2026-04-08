@@ -1,4 +1,5 @@
-use crate::id::{AgentId, ObjectiveId};
+use crate::id::{AgentId, CheckpointId, ObjectiveId};
+use crate::objective::ObjectiveStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +49,19 @@ pub enum BusEvent {
     HitlResponded {
         agent_id: AgentId,
         response: String,
+    },
+    AgentSessionReady {
+        agent_id: AgentId,
+        session_id: String,
+        directory: std::path::PathBuf,
+    },
+    CheckpointSaved {
+        agent_id: AgentId,
+        checkpoint_id: CheckpointId,
+    },
+    ObjectiveUpdated {
+        objective_id: ObjectiveId,
+        status: ObjectiveStatus,
     },
     Shutdown,
 }

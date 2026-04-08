@@ -1,4 +1,3 @@
-use crate::id::CheckpointVersion;
 use serde::{Deserialize, Serialize};
 
 #[derive(
@@ -33,8 +32,6 @@ pub struct DirectiveMetadata {
     pub tokens_estimated: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub checkpoint_version: Option<CheckpointVersion>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub injected_message: Option<String>,
 }

@@ -1,58 +1,66 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::widgets::BorderType;
 
 pub fn focused_border_style(focused: bool) -> Style {
     if focused {
-        Style::default().fg(Color::Cyan)
-    } else {
         Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
+pub fn focused_border_type(focused: bool) -> BorderType {
+    if focused {
+        BorderType::Thick
+    } else {
+        BorderType::Plain
     }
 }
 
 pub struct AppLayout {
     pub objective_tree: Rect,
-    pub agent_status: Rect,
-    pub tasks: Rect,
+    pub agent_tree: Rect,
     pub event_log: Rect,
-    pub command_bar: Rect,
+    pub hotkey_bar: Rect,
 }
 
 impl AppLayout {
-    pub fn compute(area: Rect) -> Self {
-        let vertical = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
+    pub fn compute_with_focus(area: Rect, event_log_focused: bool) -> Self {
+        let vertical = if event_log_focused {
+            Layout::vertical([
+                Constraint::Length(5),
+                Constraint::Min(10),
+                Constraint::Length(2),
+            ])
+            .split(area)
+        } else {
+            Layout::vertical([
                 Constraint::Min(10),
                 Constraint::Length(15),
-                Constraint::Length(3),
+                Constraint::Length(2),
             ])
-            .split(area);
+            .split(area)
+        };
 
-        let main_area = vertical[0];
+        let top_area = vertical[0];
         let event_log = vertical[1];
-        let command_bar = vertical[2];
+        let hotkey_bar = vertical[2];
 
-        let horizontal = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(main_area);
+        let horizontal =
+            Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+                .split(top_area);
 
         let objective_tree = horizontal[0];
-
-        let right_side = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(horizontal[1]);
-
-        let agent_status = right_side[0];
-        let tasks = right_side[1];
+        let agent_tree = horizontal[1];
 
         Self {
             objective_tree,
-            agent_status,
-            tasks,
+            agent_tree,
             event_log,
-            command_bar,
+            hotkey_bar,
         }
     }
 }

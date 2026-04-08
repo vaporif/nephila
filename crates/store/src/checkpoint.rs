@@ -1,206 +1,248 @@
-use crate::util::{f32_slice_to_bytes, parse_rfc3339};
 use crate::SqliteStore;
-use chrono::Utc;
-use meridian_core::checkpoint::{Checkpoint, L0State, L2Chunk};
-use meridian_core::id::{AgentId, CheckpointVersion};
-use meridian_core::memory::Embedding;
-use meridian_core::store::CheckpointStore;
+use crate::util::parse_rfc3339;
+use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, InterruptSnapshot};
+use nephila_core::id::{AgentId, CheckpointId};
+use std::collections::BTreeMap;
 
-impl CheckpointStore for SqliteStore {
-    async fn save(
+impl SqliteStore {
+    pub async fn save_checkpoint_metadata(
         &self,
-        agent_id: AgentId,
-        version: CheckpointVersion,
-        l0: &L0State,
-        l1: &str,
-        l2_chunks: &[L2Chunk],
-        l2_embeddings: &[Embedding],
-    ) -> meridian_core::Result<()> {
-        let l0_json = serde_json::to_string(l0)?;
-        let l1_owned = l1.to_string();
-        let l2_data: Vec<(String, Vec<u8>)> = l2_chunks
-            .iter()
-            .zip(l2_embeddings.iter())
-            .map(|(chunk, emb)| {
-                let content = serde_json::to_string(chunk)
-                    .map_err(meridian_core::MeridianError::from)?;
-                let bytes = f32_slice_to_bytes(emb);
-                Ok((content, bytes))
-            })
-            .collect::<meridian_core::Result<Vec<_>>>()?;
+        node: &CheckpointNode,
+    ) -> nephila_core::Result<()> {
+        let id = node.id;
+        let agent_id = node.agent_id;
+        let parent_id = node.parent_id;
+        let branch_label = node.branch_label.clone();
+        let channels_json =
+            serde_json::to_string(&node.channels).map_err(nephila_core::NephilaError::from)?;
+        let l2_namespace = node.l2_namespace.clone();
+        let interrupt_json = node
+            .interrupt
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(nephila_core::NephilaError::from)?;
+        let created_at = node.created_at.to_rfc3339();
 
         self.writer
             .execute(move |conn| {
-                let now = Utc::now().to_rfc3339();
-                let tx = conn.unchecked_transaction()?;
-
-                tx.execute(
-                    "INSERT INTO checkpoints (agent_id, version, layer, content, created_at)
-                     VALUES (?1, ?2, 'l0', ?3, ?4)",
+                conn.execute(
+                    "INSERT INTO checkpoints (id, agent_id, parent_id, branch_label, channels, l2_namespace, interrupt, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     rusqlite::params![
-                        agent_id,
-                        version,
-                        l0_json,
-                        now,
+                        id, agent_id, parent_id, branch_label,
+                        channels_json, l2_namespace, interrupt_json, created_at,
                     ],
                 )?;
-
-                tx.execute(
-                    "INSERT INTO checkpoints (agent_id, version, layer, content, created_at)
-                     VALUES (?1, ?2, 'l1', ?3, ?4)",
-                    rusqlite::params![
-                        agent_id,
-                        version,
-                        l1_owned,
-                        now,
-                    ],
-                )?;
-
-                for (idx, (content, emb_bytes)) in l2_data.iter().enumerate() {
-                    let layer = format!("l2_{idx}");
-                    tx.execute(
-                        "INSERT INTO checkpoints (agent_id, version, layer, content, embedding, created_at)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        rusqlite::params![
-                            agent_id,
-                            version,
-                            layer,
-                            content,
-                            emb_bytes,
-                            now,
-                        ],
-                    )?;
-                }
-
-                tx.commit()?;
                 Ok(())
             })
             .await?;
         Ok(())
     }
 
-    async fn get_latest(
+    pub async fn get_checkpoint(
+        &self,
+        id: CheckpointId,
+    ) -> nephila_core::Result<Option<CheckpointNode>> {
+        let node = self.writer.execute(move |conn| load_node(conn, id)).await?;
+        Ok(node)
+    }
+
+    pub async fn get_latest_checkpoint(
         &self,
         agent_id: AgentId,
-    ) -> meridian_core::Result<Option<Checkpoint>> {
-        let checkpoint = self
+    ) -> nephila_core::Result<Option<CheckpointNode>> {
+        let node = self
             .writer
             .execute(move |conn| {
-                let max_version: Option<i64> = conn.query_row(
-                    "SELECT MAX(version) FROM checkpoints WHERE agent_id = ?1",
+                let id: Option<CheckpointId> = match conn.query_row(
+                    "SELECT id FROM checkpoints WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 1",
                     rusqlite::params![agent_id],
                     |row| row.get(0),
-                )?;
-
-                let version = match max_version {
-                    Some(v) => v,
-                    None => return Ok(None),
+                ) {
+                    Ok(id) => Some(id),
+                    Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                    Err(e) => return Err(e),
                 };
 
-                load_checkpoint(conn, agent_id, CheckpointVersion(version as u32))
+                match id {
+                    Some(id) => load_node(conn, id),
+                    None => Ok(None),
+                }
             })
             .await?;
-        Ok(checkpoint)
+        Ok(node)
     }
 
-    async fn get_version(
+    pub async fn get_checkpoint_children(
         &self,
-        agent_id: AgentId,
-        version: CheckpointVersion,
-    ) -> meridian_core::Result<Option<Checkpoint>> {
-        let checkpoint = self
-            .writer
-            .execute(move |conn| load_checkpoint(conn, agent_id, version))
-            .await?;
-        Ok(checkpoint)
-    }
-
-    async fn list_versions(
-        &self,
-        agent_id: AgentId,
-    ) -> meridian_core::Result<Vec<CheckpointVersion>> {
-        let versions = self
+        id: CheckpointId,
+    ) -> nephila_core::Result<Vec<CheckpointNode>> {
+        let nodes = self
             .writer
             .execute(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT DISTINCT version FROM checkpoints WHERE agent_id = ?1 ORDER BY version DESC",
+                    "SELECT id, agent_id, parent_id, branch_label, channels, l2_namespace, interrupt, created_at
+                     FROM checkpoints WHERE parent_id = ?1 ORDER BY created_at",
                 )?;
                 let rows = stmt
-                    .query_map(rusqlite::params![agent_id], |row| {
-                        row.get(0)
-                    })?
+                    .query_map(rusqlite::params![id], row_to_node)?
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
             })
             .await?;
-        Ok(versions)
+        Ok(nodes)
+    }
+
+    pub async fn get_checkpoint_ancestry(
+        &self,
+        id: CheckpointId,
+    ) -> nephila_core::Result<Vec<CheckpointNode>> {
+        let nodes = self
+            .writer
+            .execute(move |conn| {
+                let mut stmt = conn.prepare(
+                    "WITH RECURSIVE ancestry(id, agent_id, parent_id, branch_label, channels, l2_namespace, interrupt, created_at, depth) AS (
+                        SELECT id, agent_id, parent_id, branch_label, channels, l2_namespace, interrupt, created_at, 0
+                        FROM checkpoints WHERE id = ?1
+                        UNION ALL
+                        SELECT c.id, c.agent_id, c.parent_id, c.branch_label, c.channels, c.l2_namespace, c.interrupt, c.created_at, a.depth + 1
+                        FROM checkpoints c JOIN ancestry a ON c.id = a.parent_id
+                    )
+                    SELECT id, agent_id, parent_id, branch_label, channels, l2_namespace, interrupt, created_at
+                    FROM ancestry ORDER BY depth DESC",
+                )?;
+                let rows = stmt
+                    .query_map(rusqlite::params![id], row_to_node)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await?;
+        Ok(nodes)
+    }
+
+    pub async fn list_checkpoint_branches(
+        &self,
+        agent_id: AgentId,
+    ) -> nephila_core::Result<Vec<CheckpointNode>> {
+        let nodes = self
+            .writer
+            .execute(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT c.id, c.agent_id, c.parent_id, c.branch_label, c.channels, c.l2_namespace, c.interrupt, c.created_at
+                     FROM checkpoints c
+                     LEFT JOIN checkpoints child ON child.parent_id = c.id
+                     WHERE c.agent_id = ?1 AND child.id IS NULL",
+                )?;
+                let rows = stmt
+                    .query_map(rusqlite::params![agent_id], row_to_node)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await?;
+        Ok(nodes)
     }
 }
 
-fn load_checkpoint(
+fn row_to_node(row: &rusqlite::Row) -> Result<CheckpointNode, rusqlite::Error> {
+    let channels_json: String = row.get(4)?;
+    let interrupt_json: Option<String> = row.get(6)?;
+    let created_str: String = row.get(7)?;
+
+    let channels: BTreeMap<String, ChannelEntry> =
+        serde_json::from_str(&channels_json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+
+    let interrupt: Option<InterruptSnapshot> = interrupt_json
+        .map(|s| serde_json::from_str(&s))
+        .transpose()
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+
+    Ok(CheckpointNode {
+        id: row.get(0)?,
+        agent_id: row.get(1)?,
+        parent_id: row.get(2)?,
+        branch_label: row.get(3)?,
+        channels,
+        l2_namespace: row.get(5)?,
+        interrupt,
+        created_at: parse_rfc3339(&created_str)?,
+    })
+}
+
+fn load_node(
     conn: &rusqlite::Connection,
-    agent_id: AgentId,
-    version: CheckpointVersion,
-) -> Result<Option<Checkpoint>, rusqlite::Error> {
-    let l0_row: Option<(String, String)> = {
-        let mut stmt = conn.prepare(
-            "SELECT content, created_at FROM checkpoints WHERE agent_id = ?1 AND version = ?2 AND layer = 'l0'",
-        )?;
-        match stmt.query_row(
-            rusqlite::params![agent_id, version],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        ) {
-            Ok(r) => Some(r),
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(e) => return Err(e),
-        }
-    };
-
-    let (l0_content, created_at_str) = match l0_row {
-        Some(r) => r,
-        None => return Ok(None),
-    };
-
-    let l1_content: String = conn.query_row(
-        "SELECT content FROM checkpoints WHERE agent_id = ?1 AND version = ?2 AND layer = 'l1'",
-        rusqlite::params![agent_id, version],
-        |row| row.get(0),
+    id: CheckpointId,
+) -> Result<Option<CheckpointNode>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, agent_id, parent_id, branch_label, channels, l2_namespace, interrupt, created_at
+         FROM checkpoints WHERE id = ?1",
     )?;
-
-    let l0: L0State = serde_json::from_str(&l0_content).map_err(|e| {
-        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
-    })?;
-    let timestamp = parse_rfc3339(&created_at_str)?;
-
-    Ok(Some(Checkpoint {
-        agent_id,
-        version,
-        l0,
-        l1: l1_content,
-        timestamp,
-    }))
+    match stmt.query_row(rusqlite::params![id], row_to_node) {
+        Ok(node) => Ok(Some(node)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::SqliteStore;
     use chrono::Utc;
-    use meridian_core::checkpoint::{L0State, L2Chunk, ObjectiveSnapshot};
-    use meridian_core::id::{AgentId, CheckpointVersion, EntryId, ObjectiveId};
-    use meridian_core::store::CheckpointStore;
+    use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, ReducerKind};
+    use nephila_core::id::{AgentId, CheckpointId, ObjectiveId};
+    use std::collections::BTreeMap;
 
-    fn make_l0() -> L0State {
-        L0State {
-            objectives: vec![ObjectiveSnapshot {
-                id: ObjectiveId::new(),
-                description: "test objective".to_string(),
-                status: "pending".to_string(),
-            }],
-            next_steps: vec!["step 1".to_string()],
+    fn make_channels() -> BTreeMap<String, ChannelEntry> {
+        BTreeMap::from([
+            (
+                "objectives".into(),
+                ChannelEntry {
+                    reducer: ReducerKind::Overwrite,
+                    value: serde_json::json!([]),
+                },
+            ),
+            (
+                "progress_summary".into(),
+                ChannelEntry {
+                    reducer: ReducerKind::Overwrite,
+                    value: serde_json::json!("initial"),
+                },
+            ),
+            (
+                "decisions".into(),
+                ChannelEntry {
+                    reducer: ReducerKind::Append,
+                    value: serde_json::json!([]),
+                },
+            ),
+            (
+                "blockers".into(),
+                ChannelEntry {
+                    reducer: ReducerKind::Append,
+                    value: serde_json::json!([]),
+                },
+            ),
+        ])
+    }
+
+    fn make_node(agent_id: AgentId, parent_id: Option<CheckpointId>) -> CheckpointNode {
+        CheckpointNode {
+            id: CheckpointId::new(),
+            agent_id,
+            parent_id,
+            branch_label: None,
+            channels: make_channels(),
+            l2_namespace: "general".into(),
+            interrupt: None,
+            created_at: Utc::now(),
         }
     }
 
-    async fn make_agent_with_objective(store: &SqliteStore) -> AgentId {
+    async fn make_agent(store: &SqliteStore) -> AgentId {
         let agent_id = AgentId::new();
         let obj_id = ObjectiveId::new();
         store
@@ -208,8 +250,8 @@ mod tests {
             .execute(move |conn| {
                 let now = Utc::now().to_rfc3339();
                 conn.execute(
-                    "INSERT INTO agents (id, state, directive, directory, objective_id, created_at, updated_at)
-                     VALUES (?1, 'starting', 'continue', '/tmp', ?2, ?3, ?4)",
+                    "INSERT INTO agents (id, state, directive, directory, objective_id, spawn_origin_type, created_at, updated_at)
+                     VALUES (?1, 'starting', 'continue', '/tmp', ?2, 'operator', ?3, ?4)",
                     rusqlite::params![agent_id, obj_id, &now, &now],
                 )?;
                 Ok(())
@@ -220,111 +262,107 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn save_and_get_latest() {
+    async fn save_and_get() {
         let store = SqliteStore::open_in_memory(384).unwrap();
-        let agent_id = make_agent_with_objective(&store).await;
+        let agent_id = make_agent(&store).await;
+        let node = make_node(agent_id, None);
+        let node_id = node.id;
 
-        let l0 = make_l0();
-        let l1 = "This is the L1 narrative summary.";
-        let l2 = vec![L2Chunk {
-            id: EntryId::new(),
-            content: "chunk content".to_string(),
-            tags: vec!["tag1".to_string()],
-        }];
-        let embedding = vec![0.1f32; 384];
-
-        store
-            .save(agent_id, CheckpointVersion(1), &l0, l1, &l2, &[embedding])
-            .await
-            .unwrap();
-
-        let cp = store.get_latest(agent_id).await.unwrap().unwrap();
-        assert_eq!(cp.version, CheckpointVersion(1));
-        assert_eq!(cp.l1, "This is the L1 narrative summary.");
-        assert_eq!(cp.l0.objectives.len(), 1);
+        store.save_checkpoint_metadata(&node).await.unwrap();
+        let fetched = store.get_checkpoint(node_id).await.unwrap().unwrap();
+        assert_eq!(fetched.id, node_id);
+        assert_eq!(fetched.agent_id, agent_id);
+        assert!(fetched.parent_id.is_none());
+        assert_eq!(fetched.channels.len(), 4);
     }
 
     #[tokio::test]
-    async fn multiple_versions() {
+    async fn get_latest() {
         let store = SqliteStore::open_in_memory(384).unwrap();
-        let agent_id = make_agent_with_objective(&store).await;
+        let agent_id = make_agent(&store).await;
 
-        let l0 = make_l0();
-        store
-            .save(agent_id, CheckpointVersion(1), &l0, "v1 text", &[], &[])
-            .await
-            .unwrap();
-        store
-            .save(agent_id, CheckpointVersion(2), &l0, "v2 text", &[], &[])
-            .await
-            .unwrap();
+        let n1 = make_node(agent_id, None);
+        store.save_checkpoint_metadata(&n1).await.unwrap();
 
-        let latest = store.get_latest(agent_id).await.unwrap().unwrap();
-        assert_eq!(latest.version, CheckpointVersion(2));
-        assert_eq!(latest.l1, "v2 text");
+        let mut n2 = make_node(agent_id, Some(n1.id));
+        n2.created_at = Utc::now();
+        store.save_checkpoint_metadata(&n2).await.unwrap();
 
-        let v1 = store
-            .get_version(agent_id, CheckpointVersion(1))
+        let latest = store
+            .get_latest_checkpoint(agent_id)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(v1.l1, "v1 text");
+        assert_eq!(latest.id, n2.id);
     }
 
     #[tokio::test]
-    async fn list_versions_test() {
+    async fn get_ancestry_chain() {
         let store = SqliteStore::open_in_memory(384).unwrap();
-        let agent_id = make_agent_with_objective(&store).await;
+        let agent_id = make_agent(&store).await;
 
-        let l0 = make_l0();
-        store
-            .save(agent_id, CheckpointVersion(1), &l0, "v1", &[], &[])
-            .await
-            .unwrap();
-        store
-            .save(agent_id, CheckpointVersion(3), &l0, "v3", &[], &[])
-            .await
-            .unwrap();
-        store
-            .save(agent_id, CheckpointVersion(2), &l0, "v2", &[], &[])
-            .await
-            .unwrap();
+        let n1 = make_node(agent_id, None);
+        store.save_checkpoint_metadata(&n1).await.unwrap();
 
-        let versions = store.list_versions(agent_id).await.unwrap();
-        assert_eq!(
-            versions,
-            vec![
-                CheckpointVersion(3),
-                CheckpointVersion(2),
-                CheckpointVersion(1),
-            ]
-        );
+        let n2 = make_node(agent_id, Some(n1.id));
+        store.save_checkpoint_metadata(&n2).await.unwrap();
+
+        let n3 = make_node(agent_id, Some(n2.id));
+        store.save_checkpoint_metadata(&n3).await.unwrap();
+
+        let ancestry = store.get_checkpoint_ancestry(n3.id).await.unwrap();
+        assert_eq!(ancestry.len(), 3);
+        assert_eq!(ancestry[0].id, n1.id);
+        assert_eq!(ancestry[1].id, n2.id);
+        assert_eq!(ancestry[2].id, n3.id);
     }
 
     #[tokio::test]
-    async fn get_latest_no_checkpoints_returns_none() {
+    async fn list_branches_two_branches() {
         let store = SqliteStore::open_in_memory(384).unwrap();
-        let agent_id = make_agent_with_objective(&store).await;
-        let result = store.get_latest(agent_id).await.unwrap();
+        let agent_id = make_agent(&store).await;
+
+        let root = make_node(agent_id, None);
+        store.save_checkpoint_metadata(&root).await.unwrap();
+
+        let mut branch_a = make_node(agent_id, Some(root.id));
+        branch_a.branch_label = Some("branch-a".into());
+        store.save_checkpoint_metadata(&branch_a).await.unwrap();
+
+        let mut branch_b = make_node(agent_id, Some(root.id));
+        branch_b.branch_label = Some("branch-b".into());
+        store.save_checkpoint_metadata(&branch_b).await.unwrap();
+
+        let leaves = store.list_checkpoint_branches(agent_id).await.unwrap();
+        assert_eq!(leaves.len(), 2);
+        let ids: Vec<_> = leaves.iter().map(|n| n.id).collect();
+        assert!(ids.contains(&branch_a.id));
+        assert!(ids.contains(&branch_b.id));
+    }
+
+    #[tokio::test]
+    async fn get_children() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let agent_id = make_agent(&store).await;
+
+        let root = make_node(agent_id, None);
+        store.save_checkpoint_metadata(&root).await.unwrap();
+
+        let child1 = make_node(agent_id, Some(root.id));
+        store.save_checkpoint_metadata(&child1).await.unwrap();
+
+        let child2 = make_node(agent_id, Some(root.id));
+        store.save_checkpoint_metadata(&child2).await.unwrap();
+
+        let children = store.get_checkpoint_children(root.id).await.unwrap();
+        assert_eq!(children.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_latest_no_checkpoints() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let agent_id = make_agent(&store).await;
+        let result = store.get_latest_checkpoint(agent_id).await.unwrap();
         assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn get_version_nonexistent_returns_none() {
-        let store = SqliteStore::open_in_memory(384).unwrap();
-        let agent_id = make_agent_with_objective(&store).await;
-        let result = store
-            .get_version(agent_id, CheckpointVersion(99))
-            .await
-            .unwrap();
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn list_versions_empty() {
-        let store = SqliteStore::open_in_memory(384).unwrap();
-        let agent_id = make_agent_with_objective(&store).await;
-        let versions = store.list_versions(agent_id).await.unwrap();
-        assert!(versions.is_empty());
     }
 }

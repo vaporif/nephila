@@ -1,12 +1,15 @@
 use std::borrow::Cow;
 
+use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
-use rmcp::ErrorData;
 use serde::{Deserialize, Serialize};
 
-use crate::server::MeridianMcpServer;
-use meridian_core::store::{AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore};
+use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::directive::Directive;
+use nephila_core::event::BusEvent;
+use nephila_core::store::AgentStore;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct ReportTokenEstimateParams {
@@ -35,21 +38,56 @@ impl ToolBase for ReportTokenEstimateTool {
     }
 
     fn description() -> Option<Cow<'static, str>> {
-        Some("Report current token usage so the lifecycle manager knows when to trigger draining.".into())
+        Some(
+            "Report current token usage so the lifecycle manager knows when to trigger draining."
+                .into(),
+        )
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for ReportTokenEstimateTool
-where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for ReportTokenEstimateTool {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &NephilaMcpServer,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(ReportTokenEstimateOutput {
-            acknowledged: true,
-        })
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        let total = params.tokens_used + params.tokens_remaining;
+        let pct = if total > 0 {
+            (params.tokens_used * 100 / total) as u8
+        } else {
+            0
+        };
+
+        if pct >= service.config.lifecycle.token_force_kill_pct {
+            if let Err(e) = service
+                .cmd_tx
+                .send(OrchestratorCommand::TokenThreshold {
+                    agent_id,
+                    directive: Directive::Abort,
+                })
+                .await
+            {
+                tracing::warn!(%agent_id, %e, "failed to send token threshold abort command");
+            }
+        } else if pct >= service.config.lifecycle.context_threshold_pct
+            && let Err(e) = service
+                .cmd_tx
+                .send(OrchestratorCommand::TokenThreshold {
+                    agent_id,
+                    directive: Directive::PrepareReset,
+                })
+                .await
+        {
+            tracing::warn!(%agent_id, %e, "failed to send token threshold reset command");
+        }
+
+        let _ = service.event_tx.send(BusEvent::TokenReport {
+            agent_id,
+            used: params.tokens_used,
+            remaining: params.tokens_remaining,
+        });
+
+        Ok(ReportTokenEstimateOutput { acknowledged: true })
     }
 }
 
@@ -81,22 +119,50 @@ impl ToolBase for GetDirectiveTool {
     }
 
     fn description() -> Option<Cow<'static, str>> {
-        Some("Check what the agent should do next: continue, prepare_reset, pause, or abort.".into())
+        Some(
+            "Check what the agent should do next: continue, prepare_reset, pause, or abort.".into(),
+        )
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for GetDirectiveTool
-where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for GetDirectiveTool {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &NephilaMcpServer,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        let directive = service
+            .sqlite
+            .get_directive(agent_id)
+            .await
+            .map_err(nephila_err)?;
+
+        let reason = match directive {
+            Directive::PrepareReset => Some("token threshold reached".to_owned()),
+            Directive::Pause => Some("paused by operator".to_owned()),
+            Directive::Abort => Some("force kill".to_owned()),
+            Directive::Continue => None,
+        };
+
+        let injected_message = service
+            .sqlite
+            .get(agent_id)
+            .await
+            .map_err(nephila_err)?
+            .and_then(|a| a.injected_message.clone());
+
+        if injected_message.is_some() {
+            service
+                .sqlite
+                .set_injected_message(agent_id, None)
+                .await
+                .map_err(nephila_err)?;
+        }
+
         Ok(GetDirectiveOutput {
-            directive: "continue".to_owned(),
-            reason: None,
-            injected_message: None,
+            directive: directive.to_string(),
+            reason,
+            injected_message,
         })
     }
 }
@@ -128,14 +194,20 @@ impl ToolBase for RequestContextResetTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for RequestContextResetTool
-where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for RequestContextResetTool {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &NephilaMcpServer,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        if let Err(e) = service
+            .cmd_tx
+            .send(OrchestratorCommand::Suspend { agent_id })
+            .await
+        {
+            tracing::warn!(%agent_id, %e, "failed to send reset command");
+            return Ok(RequestContextResetOutput { accepted: false });
+        }
         Ok(RequestContextResetOutput { accepted: true })
     }
 }

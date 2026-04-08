@@ -23,11 +23,16 @@ target
 # Nix artifact
 result
 
+goals
+
 .envrc
 
 # Compiled WASM artifacts
 *.wasm.gz
 
 .fastembed_cache
-meridian-embedding
-meridian.db
+nephila-embedding
+nephila.db
+nephila.db*
+.mcp.json
+.worktrees

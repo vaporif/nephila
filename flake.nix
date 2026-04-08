@@ -32,10 +32,11 @@
       craneLib,
     }: let
       src = craneLib.cleanCargoSource ./.;
+      onnxruntime-bin = pkgs.callPackage ./nix/onnxruntime.nix {};
 
       commonArgs = {
         inherit src;
-        pname = "meridian";
+        pname = "nephila";
         strictDeps = true;
         nativeBuildInputs =
           [
@@ -54,14 +55,28 @@
             pkgs.apple-sdk_26
           ];
         LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+        ORT_DYLIB_PATH = "${onnxruntime-bin}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
+        ORT_LIB_LOCATION = "${onnxruntime-bin}/lib";
       };
 
       cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-      meridian = craneLib.buildPackage (commonArgs
+      nephilaUnwrapped = craneLib.buildPackage (commonArgs
         // {
           inherit cargoArtifacts;
+          # Embedding tests need network (HuggingFace model download)
+          cargoTestExtraArgs = "--workspace --exclude nephila-embedding";
         });
+
+      nephila = pkgs.symlinkJoin {
+        name = "nephila";
+        paths = [nephilaUnwrapped];
+        nativeBuildInputs = [pkgs.makeWrapper];
+        postBuild = ''
+          wrapProgram $out/bin/nephila \
+            --set ORT_DYLIB_PATH "${onnxruntime-bin}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}"
+        '';
+      };
 
       toolchain = fenixPkgs.stable.withComponents [
         "cargo"
@@ -74,14 +89,14 @@
       ];
     in {
       packages = {
-        inherit meridian cargoArtifacts;
-        default = meridian;
+        inherit nephila cargoArtifacts;
+        default = nephila;
       };
 
       checks = {
         fmt = craneLib.cargoFmt {
           inherit src;
-          pname = "meridian";
+          pname = "nephila";
         };
 
         taplo =
@@ -106,7 +121,7 @@
           pkgs.runCommand "nix-fmt-check" {
             nativeBuildInputs = [pkgs.alejandra];
           } ''
-            alejandra --check ${self}/flake.nix
+            alejandra --check ${self}/flake.nix ${self}/nix/
             touch $out
           '';
       };
@@ -117,6 +132,7 @@
             toolchain
             pkgs.cargo-nextest
             pkgs.cargo-llvm-cov
+            pkgs.cargo-deny
             pkgs.taplo
             pkgs.typos
             pkgs.llvmPackages.clang
@@ -134,9 +150,10 @@
             RUST_BACKTRACE = "1";
             RUST_SRC_PATH = "${toolchain}/lib/rustlib/src/rust/library";
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+            ORT_DYLIB_PATH = "${onnxruntime-bin}/lib/libonnxruntime${pkgs.stdenv.hostPlatform.extensions.sharedLibrary}";
           }
           // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
-            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [pkgs.openssl];
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [pkgs.openssl pkgs.stdenv.cc.cc.lib];
           };
       };
     });

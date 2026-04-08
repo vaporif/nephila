@@ -1,12 +1,19 @@
 use std::borrow::Cow;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
+use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
-use rmcp::ErrorData;
 use serde::{Deserialize, Serialize};
 
-use crate::server::MeridianMcpServer;
-use meridian_core::store::{AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore};
+use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
+use nephila_core::checkpoint::InterruptType;
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::event::BusEvent;
+use nephila_core::id::{CheckpointId, InterruptId};
+use nephila_core::interrupt::{InterruptRequest, InterruptStatus};
+use nephila_core::store::{AgentStore, InterruptStore};
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct RequestHumanInputParams {
@@ -21,10 +28,8 @@ pub struct RequestHumanInputParams {
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct RequestHumanInputOutput {
-    /// The human operator's response, or a timeout message.
-    pub response: String,
-    /// Whether the response was received (false if timed out).
-    pub received: bool,
+    pub message: String,
+    pub suspending: bool,
 }
 
 pub struct RequestHumanInputTool;
@@ -39,21 +44,67 @@ impl ToolBase for RequestHumanInputTool {
     }
 
     fn description() -> Option<Cow<'static, str>> {
-        Some("Ask the human operator a question and wait for their response.".into())
+        Some("Ask the human operator a question. The agent will be suspended and the answer arrives on the next generation via get_session_checkpoint.".into())
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for RequestHumanInputTool
-where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
-{
+fn hash_question(question: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    question.hash(&mut hasher);
+    format!("{:x}", hasher.finish())
+}
+
+impl AsyncTool<NephilaMcpServer> for RequestHumanInputTool {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &NephilaMcpServer,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let agent_id = parse_agent_id(&params.agent_id)?;
+        let question_hash = hash_question(&params.question);
+
+        let checkpoint_id = service
+            .sqlite
+            .get(agent_id)
+            .await
+            .map_err(nephila_err)?
+            .and_then(|a| a.checkpoint_id)
+            .unwrap_or_else(CheckpointId::new);
+
+        let interrupt = InterruptRequest {
+            id: InterruptId::new(),
+            agent_id,
+            checkpoint_id,
+            interrupt_type: InterruptType::Hitl,
+            payload: Some(serde_json::json!({
+                "question": params.question,
+                "options": params.options,
+            })),
+            status: InterruptStatus::Pending,
+            response: None,
+            question_hash: Some(question_hash),
+            ask_count: 1,
+            created_at: chrono::Utc::now(),
+            resolved_at: None,
+        };
+
+        InterruptStore::save(service.sqlite.as_ref(), &interrupt)
+            .await
+            .map_err(nephila_err)?;
+
+        let _ = service.event_tx.send(BusEvent::HitlRequested {
+            agent_id,
+            question: params.question,
+            options: params.options,
+        });
+
+        let _ = service
+            .cmd_tx
+            .send(OrchestratorCommand::Suspend { agent_id })
+            .await;
+
         Ok(RequestHumanInputOutput {
-            response: "No operator connected".to_owned(),
-            received: false,
+            message: "Question recorded. Please checkpoint your state now — you will be suspended. The answer will be available when you are restored.".into(),
+            suspending: true,
         })
     }
 }

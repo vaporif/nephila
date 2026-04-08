@@ -2,13 +2,17 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MeridianConfig {
-    pub meridian: CoreConfig,
+pub struct NephilaConfig {
+    pub nephila: CoreConfig,
     pub lifecycle: LifecycleConfig,
     pub supervision: SupervisionConfig,
     pub summarizer: SummarizerConfig,
     pub memory: MemoryConfig,
     pub tui: TuiConfig,
+    #[serde(default)]
+    pub connector: ConnectorConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,10 +21,10 @@ pub struct CoreConfig {
     pub storage_backend: String,
     #[serde(default = "default_sqlite_path")]
     pub sqlite_path: PathBuf,
-    #[serde(default = "default_embedding_model")]
-    pub embedding_model: String,
-    #[serde(default = "default_claude_binary")]
-    pub claude_binary: String,
+    #[serde(default)]
+    pub ferrex_config_path: Option<PathBuf>,
+    #[serde(default = "default_l2_collection")]
+    pub l2_collection: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -55,6 +59,8 @@ pub struct SupervisionConfig {
     pub max_restarts: u32,
     #[serde(default = "default_restart_window_secs")]
     pub restart_window_secs: u64,
+    #[serde(default = "default_max_agent_depth")]
+    pub max_agent_depth: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,14 +95,57 @@ pub struct TuiConfig {
     pub max_hitl_rerequests: u32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectorConfig {
+    #[serde(default = "default_claude_binary")]
+    pub claude_binary: String,
+    pub anthropic_api_key_env: Option<String>,
+    pub openai_base_url: Option<String>,
+    pub openai_api_key_env: Option<String>,
+    pub default_model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpConfig {
+    #[serde(default = "default_mcp_host")]
+    pub host: String,
+    #[serde(default)]
+    pub port: u16,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            host: default_mcp_host(),
+            port: 0,
+        }
+    }
+}
+
+fn default_mcp_host() -> String {
+    "127.0.0.1".into()
+}
+
+impl Default for ConnectorConfig {
+    fn default() -> Self {
+        Self {
+            claude_binary: default_claude_binary(),
+            anthropic_api_key_env: None,
+            openai_base_url: None,
+            openai_api_key_env: None,
+            default_model: None,
+        }
+    }
+}
+
 fn default_storage_backend() -> String {
     "sqlite".into()
 }
 fn default_sqlite_path() -> PathBuf {
-    PathBuf::from("./meridian.db")
+    PathBuf::from("./nephila.db")
 }
-fn default_embedding_model() -> String {
-    "BAAI/bge-small-en-v1.5".into()
+fn default_l2_collection() -> String {
+    "nephila_l2_chunks".into()
 }
 fn default_claude_binary() -> String {
     "claude".into()
@@ -140,6 +189,9 @@ fn default_max_restarts() -> u32 {
 fn default_restart_window_secs() -> u64 {
     60
 }
+fn default_max_agent_depth() -> u32 {
+    3
+}
 fn default_summarizer_backend() -> String {
     "claude".into()
 }
@@ -165,10 +217,12 @@ fn default_max_hitl_rerequests() -> u32 {
     3
 }
 
-impl Default for MeridianConfig {
+impl Default for NephilaConfig {
     fn default() -> Self {
-        toml::from_str("[meridian]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n")
-            .expect("default config must parse")
+        toml::from_str(
+            "[nephila]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n[connector]\n[mcp]\n",
+        )
+        .expect("default config must parse")
     }
 }
 
@@ -179,7 +233,7 @@ mod tests {
     #[test]
     fn test_deserialize_minimal_config() {
         let toml_str = r#"
-[meridian]
+[nephila]
 sqlite_path = "./test.db"
 
 [lifecycle]
@@ -192,7 +246,7 @@ sqlite_path = "./test.db"
 
 [tui]
 "#;
-        let config: MeridianConfig = toml::from_str(toml_str).unwrap();
+        let config: NephilaConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.lifecycle.context_threshold_pct, 80);
         assert_eq!(config.memory.novelty_threshold, 0.95);
     }
@@ -200,11 +254,10 @@ sqlite_path = "./test.db"
     #[test]
     fn test_deserialize_full_config() {
         let toml_str = r#"
-[meridian]
+[nephila]
 storage_backend = "sqlite"
-sqlite_path = "./meridian.db"
-embedding_model = "text-embedding-3-small"
-claude_binary = "claude"
+sqlite_path = "./nephila.db"
+l2_collection = "nephila_l2_chunks"
 
 [lifecycle]
 context_threshold_pct = 80
@@ -219,6 +272,7 @@ drain_timeout_secs = 60
 default_strategy = "one_for_one"
 max_restarts = 5
 restart_window_secs = 60
+max_agent_depth = 3
 
 [summarizer]
 backend = "claude"
@@ -231,9 +285,63 @@ link_similarity_threshold = 0.75
 refresh_rate_ms = 100
 max_event_log_lines = 1000
 max_hitl_rerequests = 3
+
+[connector]
+claude_binary = "claude"
 "#;
-        let config: MeridianConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.meridian.storage_backend, "sqlite");
+        let config: NephilaConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.nephila.storage_backend, "sqlite");
         assert_eq!(config.supervision.max_restarts, 5);
+        assert_eq!(config.supervision.max_agent_depth, 3);
+        assert_eq!(config.connector.claude_binary, "claude");
+    }
+
+    #[test]
+    fn test_deserialize_config_with_connector() {
+        let toml_str = r#"
+[nephila]
+[lifecycle]
+[supervision]
+[summarizer]
+[memory]
+[tui]
+[connector]
+claude_binary = "/usr/local/bin/claude"
+anthropic_api_key_env = "MY_KEY"
+"#;
+        let config: NephilaConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.connector.claude_binary, "/usr/local/bin/claude");
+        assert_eq!(config.connector.anthropic_api_key_env.unwrap(), "MY_KEY");
+    }
+
+    #[test]
+    fn test_default_config_has_connector() {
+        let config = NephilaConfig::default();
+        assert_eq!(config.connector.claude_binary, "claude");
+    }
+
+    #[test]
+    fn test_mcp_config_defaults() {
+        let config = NephilaConfig::default();
+        assert_eq!(config.mcp.host, "127.0.0.1");
+        assert_eq!(config.mcp.port, 0);
+    }
+
+    #[test]
+    fn test_mcp_config_explicit_port() {
+        let toml_str = r#"
+[nephila]
+[lifecycle]
+[supervision]
+[summarizer]
+[memory]
+[tui]
+[mcp]
+host = "0.0.0.0"
+port = 8080
+"#;
+        let config: NephilaConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.mcp.host, "0.0.0.0");
+        assert_eq!(config.mcp.port, 8080);
     }
 }

@@ -1,6 +1,6 @@
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, ValueRef};
 
-use crate::id::{AgentId, CheckpointVersion, EntryId, ObjectiveId};
+use crate::id::{AgentId, CheckpointId, EntryId, InterruptId, ObjectiveId};
 
 macro_rules! impl_uuid_sql {
     ($($ty:ident),+) => {$(
@@ -21,17 +21,4 @@ macro_rules! impl_uuid_sql {
     )+};
 }
 
-impl_uuid_sql!(AgentId, EntryId, ObjectiveId);
-
-impl ToSql for CheckpointVersion {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(ToSqlOutput::from(self.0 as i64))
-    }
-}
-
-impl FromSql for CheckpointVersion {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        let v = i64::column_result(value)?;
-        Ok(Self(v as u32))
-    }
-}
+impl_uuid_sql!(AgentId, EntryId, ObjectiveId, CheckpointId, InterruptId);

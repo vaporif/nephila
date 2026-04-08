@@ -1,10 +1,22 @@
 [package]
-name = "meridian-store"
+name = "nephila-store"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-meridian-core = { workspace = true, features = ["rusqlite"] }
+nephila-core = { workspace = true, features = ["rusqlite"] }
+nephila-eventsourcing = { workspace = true }
+ferrex-core = { workspace = true }
+ferrex-store = { workspace = true }
+ferrex-embed = { workspace = true }
+qdrant-client = { workspace = true }
 rusqlite = { workspace = true }
 sqlite-vec = { workspace = true }
 tokio = { workspace = true }

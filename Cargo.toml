@@ -3,9 +3,10 @@ resolver = "2"
 members = [
     "crates/core",
     "crates/store",
-    "crates/embedding",
     "crates/lifecycle",
     "crates/mcp",
+    "crates/connector",
+    "crates/eventsourcing",
     "crates/tui",
     "bin",
 ]
@@ -30,23 +31,31 @@ cognitive_complexity = "allow"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+authors = ["Dmytro Onypko <vaporif@proton.me>"]
+description = "AI orchestration framework with RAG capabilities"
+repository = "https://github.com/vaporif/nephila"
+readme = "README.md"
+keywords = ["ai", "orchestration", "rag", "llm", "embeddings"]
+categories = ["development-tools"]
 
 [workspace.dependencies]
 # Internal
-meridian-core = { path = "crates/core" }
-meridian-store = { path = "crates/store" }
-meridian-embedding = { path = "crates/embedding" }
-meridian-lifecycle = { path = "crates/lifecycle" }
-meridian-mcp = { path = "crates/mcp" }
-meridian-tui = { path = "crates/tui" }
+nephila-core = { path = "crates/core" }
+nephila-store = { path = "crates/store" }
+nephila-lifecycle = { path = "crates/lifecycle" }
+nephila-mcp = { path = "crates/mcp" }
+nephila-connector = { path = "crates/connector" }
+nephila-eventsourcing = { path = "crates/eventsourcing" }
+nephila-tui = { path = "crates/tui" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1.1"
 
 # Error handling
 thiserror = "2"
@@ -57,26 +66,30 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 # Storage
-rusqlite = { version = "0.35", features = ["bundled", "vtab"] }
+rusqlite = { version = "0.39", features = ["bundled", "vtab"] }
 sqlite-vec = "0.1"
 
 # HTTP / MCP
 rmcp = { version = "1.3", features = ["server", "macros", "transport-streamable-http-server"] }
 axum = "0.8"
-schemars = "0.8"
+schemars = "1.2"
 
-# Embeddings (local ONNX)
-fastembed = "4"
+# Ferrex (RAG library)
+ferrex-core = { git = "https://github.com/vaporif/ferrex", rev = "0ea9703" }
+ferrex-store = { git = "https://github.com/vaporif/ferrex", rev = "0ea9703" }
+ferrex-embed = { git = "https://github.com/vaporif/ferrex", rev = "0ea9703" }
+qdrant-client = { version = "1", default-features = false, features = ["serde"] }
 
 # TUI
-ratatui = "0.29"
-crossterm = "0.28"
+ratatui = "0.30"
+crossterm = "0.29"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+dirs = "6"
 
 # Enum utilities
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 
 # Logging
 tracing = "0.1"

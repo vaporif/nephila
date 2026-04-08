@@ -1,16 +1,16 @@
-use crate::util::parse_rfc3339;
 use crate::SqliteStore;
+use crate::util::parse_rfc3339;
 use chrono::{DateTime, Utc};
-use meridian_core::event::{EventType, McpEvent};
-use meridian_core::id::AgentId;
-use meridian_core::store::EventStore;
+use nephila_core::event::{EventType, McpEvent};
+use nephila_core::id::AgentId;
+use nephila_core::store::McpEventLog;
 
-impl EventStore for SqliteStore {
-    async fn append(&self, event: McpEvent) -> meridian_core::Result<()> {
+impl McpEventLog for SqliteStore {
+    async fn append(&self, event: McpEvent) -> nephila_core::Result<()> {
         let event_type_str =
-            serde_json::to_string(&event.event_type).map_err(meridian_core::MeridianError::from)?;
+            serde_json::to_string(&event.event_type).map_err(nephila_core::NephilaError::from)?;
         let content_str =
-            serde_json::to_string(&event.content).map_err(meridian_core::MeridianError::from)?;
+            serde_json::to_string(&event.content).map_err(nephila_core::NephilaError::from)?;
         self.writer
             .execute(move |conn| {
                 conn.execute(
@@ -36,7 +36,7 @@ impl EventStore for SqliteStore {
         agent_id: AgentId,
         since: Option<DateTime<Utc>>,
         limit: usize,
-    ) -> meridian_core::Result<Vec<McpEvent>> {
+    ) -> nephila_core::Result<Vec<McpEvent>> {
         let events = self
             .writer
             .execute(move |conn| {
@@ -64,11 +64,8 @@ impl EventStore for SqliteStore {
                              ORDER BY timestamp DESC
                              LIMIT ?2",
                         )?;
-                        stmt.query_map(
-                            rusqlite::params![agent_id, limit as i64],
-                            row_to_event,
-                        )?
-                        .collect::<Result<Vec<_>, _>>()?
+                        stmt.query_map(rusqlite::params![agent_id, limit as i64], row_to_event)?
+                            .collect::<Result<Vec<_>, _>>()?
                     }
                 };
                 Ok(rows)
@@ -77,12 +74,9 @@ impl EventStore for SqliteStore {
         Ok(events)
     }
 
-    async fn get_tool_calls(
-        &self,
-        agent_id: AgentId,
-    ) -> meridian_core::Result<Vec<McpEvent>> {
+    async fn get_tool_calls(&self, agent_id: AgentId) -> nephila_core::Result<Vec<McpEvent>> {
         let tool_call_type = serde_json::to_string(&EventType::ToolCall)
-            .map_err(meridian_core::MeridianError::from)?;
+            .map_err(nephila_core::NephilaError::from)?;
         let events = self
             .writer
             .execute(move |conn| {
@@ -93,10 +87,7 @@ impl EventStore for SqliteStore {
                      ORDER BY timestamp DESC",
                 )?;
                 let rows = stmt
-                    .query_map(
-                        rusqlite::params![agent_id, tool_call_type],
-                        row_to_event,
-                    )?
+                    .query_map(rusqlite::params![agent_id, tool_call_type], row_to_event)?
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(rows)
             })
@@ -131,9 +122,9 @@ fn row_to_event(row: &rusqlite::Row) -> Result<McpEvent, rusqlite::Error> {
 mod tests {
     use crate::test_util::make_agent_and_store;
     use chrono::Utc;
-    use meridian_core::event::{EventType, McpEvent};
-    use meridian_core::id::AgentId;
-    use meridian_core::store::EventStore;
+    use nephila_core::event::{EventType, McpEvent};
+    use nephila_core::id::AgentId;
+    use nephila_core::store::McpEventLog;
 
     fn make_event(agent_id: AgentId, event_type: EventType) -> McpEvent {
         McpEvent {
@@ -242,10 +233,7 @@ mod tests {
             .unwrap();
         assert_eq!(since_mid.len(), 1);
 
-        let since_before = store
-            .get_events(agent_id, Some(before), 10)
-            .await
-            .unwrap();
+        let since_before = store.get_events(agent_id, Some(before), 10).await.unwrap();
         assert_eq!(since_before.len(), 2);
     }
 }

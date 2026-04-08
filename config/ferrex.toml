@@ -1,0 +1,44 @@
+[deduplication]
+threshold = 0.95
+
+[conflict]
+object_fuzzy_duplicate = 0.95
+object_fuzzy_update    = 0.50
+
+[predicates.groups]
+depends_on    = ["uses", "depends-on", "requires", "needs", "imports"]
+has_version   = ["version", "at-version", "pinned-to", "version-is"]
+is_a          = ["is-a", "type-of", "kind-of", "instance-of"]
+part_of       = ["belongs-to", "member-of", "contained-in"]
+written_in    = ["language-is", "built-with", "uses-language"]
+hosted_at     = ["lives-at", "repo-at", "url-is", "found-at"]
+runs_on       = ["deployed-to", "hosted-on", "serves-from"]
+maintained_by = ["owned-by", "managed-by", "authored-by", "led-by"]
+
+[reconciliation]
+audit_fix_limit = 1000
+
+reader_pool_size = 4
+
+[staleness]
+weight_age = 0.40
+weight_access = 0.25
+weight_validated = 0.25
+weight_count = 0.10
+count_scale = 10.0
+
+[staleness.episodic]
+half_life_days = 30
+stale_threshold = 0.70
+
+[staleness.semantic]
+half_life_days = 180
+stale_threshold = 0.80
+
+[staleness.procedural]
+half_life_days = 365
+stale_threshold = 0.90
+
+[cache]
+embedding_capacity = 256
+result_capacity = 128

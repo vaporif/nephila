@@ -1,4 +1,4 @@
-use meridian_core::agent::AgentPhase;
+use nephila_core::agent::AgentPhase;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolName {
@@ -12,6 +12,9 @@ pub enum ToolName {
     RequestHumanInput,
     SerializeAndPersist,
     RequestContextReset,
+    SpawnAgent,
+    GetAgentStatus,
+    GetEventLog,
 }
 
 impl ToolName {
@@ -27,13 +30,16 @@ impl ToolName {
             Self::RequestHumanInput => "request_human_input",
             Self::SerializeAndPersist => "serialize_and_persist",
             Self::RequestContextReset => "request_context_reset",
+            Self::SpawnAgent => "spawn_agent",
+            Self::GetAgentStatus => "get_agent_status",
+            Self::GetEventLog => "get_event_log",
         }
     }
 }
 
 pub fn phase_tools(phase: AgentPhase) -> Vec<ToolName> {
     match phase {
-        AgentPhase::Restoring => vec![
+        AgentPhase::Starting => vec![
             ToolName::GetSessionCheckpoint,
             ToolName::SearchGraph,
             ToolName::GetObjectiveTree,
@@ -47,8 +53,11 @@ pub fn phase_tools(phase: AgentPhase) -> Vec<ToolName> {
             ToolName::UpdateObjective,
             ToolName::RequestHumanInput,
             ToolName::GetDirective,
+            ToolName::SpawnAgent,
+            ToolName::GetAgentStatus,
+            ToolName::GetEventLog,
         ],
-        AgentPhase::Draining => vec![
+        AgentPhase::Suspending => vec![
             ToolName::SerializeAndPersist,
             ToolName::StoreMemory,
             ToolName::RequestContextReset,
@@ -62,15 +71,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn restoring_phase_has_expected_tools() {
-        let tools = phase_tools(AgentPhase::Restoring);
+    fn starting_phase_has_expected_tools() {
+        let tools = phase_tools(AgentPhase::Starting);
         assert!(tools.contains(&ToolName::GetSessionCheckpoint));
         assert!(tools.contains(&ToolName::SearchGraph));
         assert!(tools.contains(&ToolName::GetObjectiveTree));
         assert!(tools.contains(&ToolName::GetDirective));
         assert_eq!(tools.len(), 4);
 
-        // excluded from this phase
         assert!(!tools.contains(&ToolName::ReportTokenEstimate));
         assert!(!tools.contains(&ToolName::StoreMemory));
         assert!(!tools.contains(&ToolName::SerializeAndPersist));
@@ -86,24 +94,25 @@ mod tests {
         assert!(tools.contains(&ToolName::UpdateObjective));
         assert!(tools.contains(&ToolName::RequestHumanInput));
         assert!(tools.contains(&ToolName::GetDirective));
-        assert_eq!(tools.len(), 7);
+        assert!(tools.contains(&ToolName::SpawnAgent));
+        assert!(tools.contains(&ToolName::GetAgentStatus));
+        assert!(tools.contains(&ToolName::GetEventLog));
+        assert_eq!(tools.len(), 10);
 
-        // excluded from this phase
         assert!(!tools.contains(&ToolName::GetSessionCheckpoint));
         assert!(!tools.contains(&ToolName::SerializeAndPersist));
         assert!(!tools.contains(&ToolName::RequestContextReset));
     }
 
     #[test]
-    fn draining_phase_has_expected_tools() {
-        let tools = phase_tools(AgentPhase::Draining);
+    fn suspending_phase_has_expected_tools() {
+        let tools = phase_tools(AgentPhase::Suspending);
         assert!(tools.contains(&ToolName::SerializeAndPersist));
         assert!(tools.contains(&ToolName::StoreMemory));
         assert!(tools.contains(&ToolName::RequestContextReset));
         assert!(tools.contains(&ToolName::GetDirective));
         assert_eq!(tools.len(), 4);
 
-        // excluded from this phase
         assert!(!tools.contains(&ToolName::GetSessionCheckpoint));
         assert!(!tools.contains(&ToolName::ReportTokenEstimate));
         assert!(!tools.contains(&ToolName::UpdateObjective));
@@ -112,9 +121,9 @@ mod tests {
     #[test]
     fn get_directive_available_in_all_phases() {
         for phase in [
-            AgentPhase::Restoring,
+            AgentPhase::Starting,
             AgentPhase::Active,
-            AgentPhase::Draining,
+            AgentPhase::Suspending,
         ] {
             let tools = phase_tools(phase);
             assert!(
@@ -137,10 +146,16 @@ mod tests {
             ToolName::RequestHumanInput,
             ToolName::SerializeAndPersist,
             ToolName::RequestContextReset,
+            ToolName::SpawnAgent,
+            ToolName::GetAgentStatus,
+            ToolName::GetEventLog,
         ];
         for name in &all {
             let s = name.as_str();
             assert!(!s.is_empty(), "{name:?} must have a non-empty wire name");
         }
+        assert_eq!(ToolName::SpawnAgent.as_str(), "spawn_agent");
+        assert_eq!(ToolName::GetAgentStatus.as_str(), "get_agent_status");
+        assert_eq!(ToolName::GetEventLog.as_str(), "get_event_log");
     }
 }

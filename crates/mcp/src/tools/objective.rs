@@ -1,12 +1,14 @@
 use std::borrow::Cow;
 
+use rmcp::ErrorData;
 use rmcp::handler::server::router::tool::{AsyncTool, ToolBase};
 use rmcp::schemars;
-use rmcp::ErrorData;
 use serde::{Deserialize, Serialize};
 
-use crate::server::MeridianMcpServer;
-use meridian_core::store::{AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore};
+use crate::server::{NephilaMcpServer, nephila_err, parse_objective_id};
+use nephila_core::event::BusEvent;
+use nephila_core::objective::ObjectiveStatus;
+use nephila_core::store::ObjectiveStore;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct GetObjectiveTreeParams {
@@ -36,17 +38,22 @@ impl ToolBase for GetObjectiveTreeTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for GetObjectiveTreeTool
-where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for GetObjectiveTreeTool {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &NephilaMcpServer,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
-        Ok(GetObjectiveTreeOutput {
-            tree_json: "{}".to_owned(),
-        })
+        let root_id = parse_objective_id(&params.root_id)?;
+
+        let tree = service
+            .sqlite
+            .get_tree(root_id)
+            .await
+            .map_err(nephila_err)?;
+        let tree_json = serde_json::to_string(&tree)
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+
+        Ok(GetObjectiveTreeOutput { tree_json })
     }
 }
 
@@ -79,14 +86,34 @@ impl ToolBase for UpdateObjectiveTool {
     }
 }
 
-impl<S> AsyncTool<MeridianMcpServer<S>> for UpdateObjectiveTool
-where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
-{
+impl AsyncTool<NephilaMcpServer> for UpdateObjectiveTool {
     async fn invoke(
-        _service: &MeridianMcpServer<S>,
-        _params: Self::Parameter,
+        service: &NephilaMcpServer,
+        params: Self::Parameter,
     ) -> Result<Self::Output, Self::Error> {
+        let objective_id = parse_objective_id(&params.objective_id)?;
+
+        let status: ObjectiveStatus = params.status.parse().map_err(|_| {
+            ErrorData::invalid_params(
+                format!(
+                    "invalid status: '{}' (expected: pending, in_progress, done, blocked)",
+                    params.status
+                ),
+                None,
+            )
+        })?;
+
+        service
+            .sqlite
+            .update_status(objective_id, status)
+            .await
+            .map_err(nephila_err)?;
+
+        let _ = service.event_tx.send(BusEvent::ObjectiveUpdated {
+            objective_id,
+            status,
+        });
+
         Ok(UpdateObjectiveOutput { updated: true })
     }
 }

@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
 };
 
-use crate::layout::focused_border_style;
+use crate::layout::{focused_border_style, focused_border_type};
 
 const DEFAULT_MAX_LINES: usize = 1000;
 
@@ -16,6 +16,8 @@ pub struct EventLogState {
     pub entries: VecDeque<String>,
     pub max_lines: usize,
     pub scroll_offset: Option<usize>,
+    /// Cached from last render so scroll_up knows the viewport size.
+    visible_height: usize,
 }
 
 impl Default for EventLogState {
@@ -24,6 +26,7 @@ impl Default for EventLogState {
             entries: VecDeque::new(),
             max_lines: DEFAULT_MAX_LINES,
             scroll_offset: None,
+            visible_height: 10,
         }
     }
 }
@@ -39,11 +42,11 @@ impl EventLogState {
         self.entries.push_back(entry);
     }
 
-    /// `None` = auto-scroll to bottom, `Some(n)` = pinned at index n.
+    /// `None` = auto-scroll to bottom, `Some(n)` = pinned at top-of-viewport index.
     pub fn scroll_up(&mut self, amount: usize) {
         let current = self
             .scroll_offset
-            .unwrap_or(self.entries.len().saturating_sub(1));
+            .unwrap_or_else(|| self.entries.len().saturating_sub(self.visible_height));
         self.scroll_offset = Some(current.saturating_sub(amount));
     }
 
@@ -72,12 +75,14 @@ impl StatefulWidget for EventLogWidget {
         let block = Block::default()
             .title(" Event Log ")
             .borders(Borders::ALL)
+            .border_type(focused_border_type(self.focused))
             .border_style(focused_border_style(self.focused));
 
         let inner = block.inner(area);
         block.render(area, buf);
 
         let visible_height = inner.height as usize;
+        state.visible_height = visible_height;
         let total = state.entries.len();
 
         let start = match state.scroll_offset {

@@ -1,40 +1,59 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::model::{
-    CallToolRequestParams, CallToolResult, Implementation, ListToolsResult,
-    PaginatedRequestParams, ServerCapabilities, ServerInfo,
-};
-use rmcp::service::{RequestContext, RoleServer};
 use rmcp::ErrorData;
 use rmcp::ServerHandler;
-use tokio::sync::{RwLock, broadcast};
+use rmcp::handler::server::router::tool::ToolRouter;
+use rmcp::model::{
+    CallToolRequestParams, CallToolResult, Implementation, ListToolsResult, PaginatedRequestParams,
+    ServerCapabilities, ServerInfo,
+};
+use rmcp::service::{RequestContext, RoleServer};
+use tokio::sync::{RwLock, broadcast, mpsc};
 
-use meridian_core::config::MeridianConfig;
-use meridian_core::event::BusEvent;
-use meridian_core::id::AgentId;
-use meridian_core::store::{AgentStore, CheckpointStore, EventStore, HitlStore, MemoryStore, ObjectiveStore};
+use nephila_core::command::OrchestratorCommand;
+use nephila_core::config::NephilaConfig;
+use nephila_core::error::NephilaError;
+use nephila_core::event::BusEvent;
+use nephila_core::id::AgentId;
+use nephila_store::{FerrexStore, SqliteStore};
 
 use crate::state::HitlRequest;
+use crate::tools::agent::{GetAgentStatusTool, GetEventLogTool, SpawnAgentTool};
 use crate::tools::checkpoint::{GetSessionCheckpointTool, SerializeAndPersistTool};
+use crate::tools::fork::ForkAgentTool;
 use crate::tools::hitl::RequestHumanInputTool;
 use crate::tools::lifecycle::{GetDirectiveTool, ReportTokenEstimateTool, RequestContextResetTool};
 use crate::tools::memory::{SearchGraphTool, StoreMemoryTool};
 use crate::tools::objective::{GetObjectiveTreeTool, UpdateObjectiveTool};
 
-pub struct MeridianMcpServer<S> {
-    tool_router: ToolRouter<Self>,
-    pub store: Arc<S>,
-    pub event_tx: broadcast::Sender<BusEvent>,
-    pub hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
-    pub config: MeridianConfig,
+pub fn nephila_err(e: NephilaError) -> rmcp::ErrorData {
+    ErrorData::internal_error(e.to_string(), None)
 }
 
-impl<S> MeridianMcpServer<S>
-where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
-{
+pub fn parse_agent_id(s: &str) -> Result<AgentId, rmcp::ErrorData> {
+    s.parse::<uuid::Uuid>()
+        .map(AgentId)
+        .map_err(|e| ErrorData::invalid_params(format!("invalid agent_id: {e}"), None))
+}
+
+pub fn parse_objective_id(s: &str) -> Result<nephila_core::id::ObjectiveId, rmcp::ErrorData> {
+    s.parse::<uuid::Uuid>()
+        .map(nephila_core::id::ObjectiveId)
+        .map_err(|e| ErrorData::invalid_params(format!("invalid objective_id: {e}"), None))
+}
+
+pub struct NephilaMcpServer {
+    tool_router: ToolRouter<Self>,
+    pub sqlite: Arc<SqliteStore>,
+    pub ferrex: Arc<FerrexStore>,
+    pub event_tx: broadcast::Sender<BusEvent>,
+    pub cmd_tx: mpsc::Sender<OrchestratorCommand>,
+    pub hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
+    pub config: NephilaConfig,
+}
+
+impl NephilaMcpServer {
     fn build_tool_router() -> ToolRouter<Self> {
         ToolRouter::new()
             .with_async_tool::<GetSessionCheckpointTool>()
@@ -47,27 +66,33 @@ where
             .with_async_tool::<GetObjectiveTreeTool>()
             .with_async_tool::<UpdateObjectiveTool>()
             .with_async_tool::<RequestHumanInputTool>()
+            .with_async_tool::<SpawnAgentTool>()
+            .with_async_tool::<GetAgentStatusTool>()
+            .with_async_tool::<GetEventLogTool>()
+            .with_async_tool::<ForkAgentTool>()
     }
 
     pub fn new(
-        store: Arc<S>,
+        sqlite: Arc<SqliteStore>,
+        ferrex: Arc<FerrexStore>,
         event_tx: broadcast::Sender<BusEvent>,
-        config: MeridianConfig,
+        cmd_tx: mpsc::Sender<OrchestratorCommand>,
+        hitl_requests: Arc<RwLock<HashMap<AgentId, HitlRequest>>>,
+        config: NephilaConfig,
     ) -> Self {
         Self {
             tool_router: Self::build_tool_router(),
-            store,
+            sqlite,
+            ferrex,
             event_tx,
-            hitl_requests: Arc::new(RwLock::new(HashMap::new())),
+            cmd_tx,
+            hitl_requests,
             config,
         }
     }
 }
 
-impl<S> ServerHandler for MeridianMcpServer<S>
-where
-    S: AgentStore + CheckpointStore + MemoryStore + ObjectiveStore + EventStore + HitlStore + Send + Sync + 'static,
-{
+impl ServerHandler for NephilaMcpServer {
     fn get_info(&self) -> ServerInfo {
         let capabilities = ServerCapabilities::builder()
             .enable_tools()
@@ -76,11 +101,11 @@ where
 
         ServerInfo::new(capabilities)
             .with_server_info(Implementation::new(
-                "meridian-mcp",
+                "nephila-mcp",
                 env!("CARGO_PKG_VERSION"),
             ))
             .with_instructions(
-                "Meridian lifecycle-aware MCP server. Tools are filtered by agent phase.",
+                "Nephila lifecycle-aware MCP server. Tools are filtered by agent phase.",
             )
     }
 
@@ -89,8 +114,7 @@ where
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        let tcc =
-            rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         self.tool_router.call(tcc).await
     }
 
