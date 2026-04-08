@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
             memory_service,
             (*sqlite_store).clone(),
             config.nephila.l2_collection.clone(),
+            "nephila",
         )
         .await
         .map_err(|e| color_eyre::eyre::eyre!("ferrex store init: {e}"))?,

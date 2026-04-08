@@ -26,7 +26,14 @@ impl FerrexStore {
         service: MemoryService,
         sqlite: SqliteStore,
         l2_collection: String,
+        memory_namespace: &str,
     ) -> Result<Self> {
+        if l2_collection == memory_namespace {
+            return Err(NephilaError::Storage(format!(
+                "L2 collection '{l2_collection}' must differ from memory namespace '{memory_namespace}'"
+            )));
+        }
+
         service
             .vector_store()
             .ensure_collection(&l2_collection)

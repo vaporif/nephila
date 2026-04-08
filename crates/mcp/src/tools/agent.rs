@@ -15,8 +15,6 @@ use nephila_core::store::{AgentStore, McpEventLog, ObjectiveStore};
 
 use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
 
-// ── spawn_agent ──
-
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct SpawnAgentParams {
     /// The agent ID of the requesting (parent) agent.
@@ -144,8 +142,6 @@ impl AsyncTool<NephilaMcpServer> for SpawnAgentTool {
     }
 }
 
-// ── get_agent_status ──
-
 #[derive(Debug, Deserialize, schemars::JsonSchema, Default)]
 pub struct GetAgentStatusParams {
     /// The agent ID to check status for.
@@ -216,8 +212,6 @@ impl AsyncTool<NephilaMcpServer> for GetAgentStatusTool {
         }
     }
 }
-
-// ── get_event_log ──
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetEventLogParams {

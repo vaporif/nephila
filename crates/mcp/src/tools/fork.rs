@@ -59,15 +59,13 @@ impl AsyncTool<NephilaMcpServer> for ForkAgentTool {
                 ErrorData::invalid_params(format!("invalid source_checkpoint_id: {e}"), None)
             })?;
 
-        // Verify source checkpoint exists
-        let _checkpoint = CheckpointStore::get(service.ferrex.as_ref(), source_checkpoint_id)
+        CheckpointStore::get(service.ferrex.as_ref(), source_checkpoint_id)
             .await
             .map_err(nephila_err)?
             .ok_or_else(|| {
                 ErrorData::invalid_params("source checkpoint not found".to_string(), None)
             })?;
 
-        // Get source agent for objective and directory
         let source_agent = service
             .sqlite
             .get(source_agent_id)
@@ -75,7 +73,6 @@ impl AsyncTool<NephilaMcpServer> for ForkAgentTool {
             .map_err(nephila_err)?
             .ok_or_else(|| ErrorData::invalid_params("source agent not found".to_string(), None))?;
 
-        // Create sub-objective
         let sub_obj_id = service
             .sqlite
             .create(NewObjective {
@@ -92,7 +89,6 @@ impl AsyncTool<NephilaMcpServer> for ForkAgentTool {
             .await
             .map_err(nephila_err)?;
 
-        // Create new agent with fork origin
         let new_agent_id = AgentId::new();
         let mut new_agent = Agent::new(
             new_agent_id,
@@ -118,7 +114,6 @@ impl AsyncTool<NephilaMcpServer> for ForkAgentTool {
             .await
             .map_err(nephila_err)?;
 
-        // Send spawn command
         let _ = service
             .cmd_tx
             .send(nephila_core::command::OrchestratorCommand::Spawn {

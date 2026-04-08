@@ -62,7 +62,6 @@ impl AsyncTool<NephilaMcpServer> for RequestHumanInputTool {
         let agent_id = parse_agent_id(&params.agent_id)?;
         let question_hash = hash_question(&params.question);
 
-        // Get the agent's current checkpoint to tie the interrupt to
         let checkpoint_id = service
             .sqlite
             .get(agent_id)
@@ -98,7 +97,6 @@ impl AsyncTool<NephilaMcpServer> for RequestHumanInputTool {
             options: params.options,
         });
 
-        // Trigger suspension
         let _ = service
             .cmd_tx
             .send(OrchestratorCommand::Suspend { agent_id })
