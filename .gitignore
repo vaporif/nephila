@@ -36,3 +36,4 @@ nephila.db
 nephila.db*
 .mcp.json
 .worktrees
+.qdrant-initialized
