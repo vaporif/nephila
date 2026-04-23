@@ -169,8 +169,12 @@ impl LifecycleSupervisor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    use nephila_core::checkpoint::CheckpointNode;
     use nephila_core::config::{LifecycleConfig, SupervisionConfig};
-    use nephila_core::id::AgentId;
+    use nephila_core::id::{AgentId, CheckpointId};
+    use nephila_core::store::AgentStore;
 
     fn test_lifecycle_config() -> LifecycleConfig {
         LifecycleConfig {
