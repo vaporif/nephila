@@ -461,6 +461,11 @@ mod tests {
         assert!(result.contains("do the thing"));
     }
 
+    fn activate_agent(agent: Agent) -> Agent {
+        let events = agent.handle(AgentCommand::Activate).unwrap();
+        events.iter().fold(agent, |a, e| a.apply_event(e))
+    }
+
     #[tokio::test]
     async fn agent_exited_from_suspending_transitions_to_exited() {
         let agent_id = AgentId::new();
@@ -468,8 +473,7 @@ mod tests {
 
         let mut agent = make_agent(agent_id, None);
         agent.objective_id = objective_id;
-        let events = agent.handle(AgentCommand::Activate).unwrap();
-        let agent = events.iter().fold(agent, |a, e| a.apply_event(e));
+        let agent = activate_agent(agent);
         let events = agent.handle(AgentCommand::StartSuspending).unwrap();
         let agent = events.iter().fold(agent, |a, e| a.apply_event(e));
         assert_eq!(agent.state, AgentState::Suspending);
@@ -485,5 +489,204 @@ mod tests {
 
         let agent = orch.agents.get(&agent_id).unwrap();
         assert_eq!(agent.state, AgentState::Exited);
+    }
+
+    #[tokio::test]
+    async fn agent_exited_active_success_transitions_to_completed() {
+        let agent_id = AgentId::new();
+        let agent = activate_agent(make_agent(agent_id, None));
+        assert_eq!(agent.state, AgentState::Active);
+
+        let mut agents = HashMap::new();
+        agents.insert(agent_id, agent.clone());
+
+        let mut orch = test_orchestrator(agents);
+        orch.store.register(agent).await.unwrap();
+
+        orch.handle_agent_exited(agent_id, true).await.unwrap();
+
+        let agent = orch.agents.get(&agent_id).unwrap();
+        assert_eq!(agent.state, AgentState::Completed);
+    }
+
+    #[tokio::test]
+    async fn agent_exited_active_failure_transitions_to_failed() {
+        let agent_id = AgentId::new();
+        let agent = activate_agent(make_agent(agent_id, None));
+
+        let mut agents = HashMap::new();
+        agents.insert(agent_id, agent.clone());
+
+        let mut orch = test_orchestrator(agents);
+        orch.store.register(agent).await.unwrap();
+
+        orch.handle_agent_exited(agent_id, false).await.unwrap();
+
+        let agent = orch.agents.get(&agent_id).unwrap();
+        assert_eq!(agent.state, AgentState::Failed);
+    }
+
+    #[tokio::test]
+    async fn agent_exited_unknown_agent_is_ok() {
+        let mut orch = test_orchestrator(HashMap::new());
+        let result = orch.handle_agent_exited(AgentId::new(), true).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn agent_exited_already_completed_is_noop() {
+        let agent_id = AgentId::new();
+        let agent = activate_agent(make_agent(agent_id, None));
+        let events = agent.handle(AgentCommand::Complete).unwrap();
+        let agent = events.iter().fold(agent, |a, e| a.apply_event(e));
+        assert_eq!(agent.state, AgentState::Completed);
+
+        let mut agents = HashMap::new();
+        agents.insert(agent_id, agent.clone());
+
+        let mut orch = test_orchestrator(agents);
+        orch.store.register(agent).await.unwrap();
+
+        orch.handle_agent_exited(agent_id, false).await.unwrap();
+        // State should remain Completed (no-op)
+        assert_eq!(
+            orch.agents.get(&agent_id).unwrap().state,
+            AgentState::Completed
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_activates_agent_and_persists() {
+        let agent_id = AgentId::new();
+        let agent = make_agent(agent_id, None);
+        assert_eq!(agent.state, AgentState::Starting);
+
+        let mut agents = HashMap::new();
+        agents.insert(agent_id, agent.clone());
+
+        let mut orch = test_orchestrator(agents);
+        orch.store.register(agent).await.unwrap();
+
+        orch.dispatch(agent_id, AgentCommand::Activate)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            orch.agents.get(&agent_id).unwrap().state,
+            AgentState::Active
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_unknown_agent_errors() {
+        let mut orch = test_orchestrator(HashMap::new());
+        let result = orch.dispatch(AgentId::new(), AgentCommand::Activate).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn publish_emits_state_changed_event() {
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let store = Arc::new(SqliteStore::open_in_memory(384).unwrap());
+        let (cmd_tx, _) = mpsc::channel(16);
+        let orch = Orchestrator {
+            agents: HashMap::new(),
+            connectors: HashMap::new(),
+            process_handles: HashMap::new(),
+            connector_config: ConnectorConfig::default(),
+            store,
+            event_tx,
+            hitl_requests: Arc::new(RwLock::new(HashMap::new())),
+            max_agent_depth: 3,
+            mcp_endpoint: "http://localhost:8080/mcp".into(),
+            cmd_tx,
+        };
+
+        let agent_id = AgentId::new();
+        let events = vec![AgentEvent::StateChanged {
+            agent_id,
+            old_state: AgentState::Starting,
+            new_state: AgentState::Active,
+        }];
+        orch.publish(&events);
+
+        let received = event_rx.try_recv().unwrap();
+        assert!(matches!(
+            received,
+            BusEvent::AgentStateChanged {
+                new_state: AgentState::Active,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn publish_emits_session_ready_event() {
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let store = Arc::new(SqliteStore::open_in_memory(384).unwrap());
+        let (cmd_tx, _) = mpsc::channel(16);
+        let orch = Orchestrator {
+            agents: HashMap::new(),
+            connectors: HashMap::new(),
+            process_handles: HashMap::new(),
+            connector_config: ConnectorConfig::default(),
+            store,
+            event_tx,
+            hitl_requests: Arc::new(RwLock::new(HashMap::new())),
+            max_agent_depth: 3,
+            mcp_endpoint: "http://localhost:8080/mcp".into(),
+            cmd_tx,
+        };
+
+        let agent_id = AgentId::new();
+        let events = vec![AgentEvent::SessionReady {
+            agent_id,
+            session_id: "sess-1".into(),
+            directory: PathBuf::from("/tmp"),
+        }];
+        orch.publish(&events);
+
+        let received = event_rx.try_recv().unwrap();
+        assert!(matches!(received, BusEvent::AgentSessionReady { .. }));
+    }
+
+    #[test]
+    fn publish_skips_non_broadcast_events() {
+        let (event_tx, mut event_rx) = broadcast::channel(16);
+        let store = Arc::new(SqliteStore::open_in_memory(384).unwrap());
+        let (cmd_tx, _) = mpsc::channel(16);
+        let orch = Orchestrator {
+            agents: HashMap::new(),
+            connectors: HashMap::new(),
+            process_handles: HashMap::new(),
+            connector_config: ConnectorConfig::default(),
+            store,
+            event_tx,
+            hitl_requests: Arc::new(RwLock::new(HashMap::new())),
+            max_agent_depth: 3,
+            mcp_endpoint: "http://localhost:8080/mcp".into(),
+            cmd_tx,
+        };
+
+        let events = vec![AgentEvent::DirectiveChanged {
+            agent_id: AgentId::new(),
+            directive: Directive::Continue,
+        }];
+        orch.publish(&events);
+
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn compose_prompt_appends_task_section() {
+        let result = compose_prompt(
+            "template",
+            AgentId::new(),
+            ObjectiveId::new(),
+            "http://localhost/mcp",
+            "my task",
+        );
+        assert!(result.contains("# Your Task"));
+        assert!(result.ends_with("my task"));
     }
 }

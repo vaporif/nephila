@@ -401,6 +401,133 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn register_agent_creates_token_tracker() {
+        let (event_tx, _) = broadcast::channel(16);
+        let (cmd_tx, _) = mpsc::channel(16);
+        let store = Arc::new(nephila_store::SqliteStore::open_in_memory(384).unwrap());
+
+        let mut supervisor = LifecycleSupervisor::new(
+            event_tx.subscribe(),
+            cmd_tx,
+            store,
+            test_lifecycle_config(),
+            test_supervision_config(),
+        );
+
+        let agent_id = AgentId::new();
+        assert!(!supervisor.token_trackers.contains_key(&agent_id));
+        supervisor.register_agent(agent_id);
+        assert!(supervisor.token_trackers.contains_key(&agent_id));
+    }
+
+    #[tokio::test]
+    async fn handle_agent_session_ready_registers_tracker() {
+        let (event_tx, _) = broadcast::channel(16);
+        let (cmd_tx, _) = mpsc::channel(16);
+        let store = Arc::new(nephila_store::SqliteStore::open_in_memory(384).unwrap());
+
+        let mut supervisor = LifecycleSupervisor::new(
+            event_tx.subscribe(),
+            cmd_tx,
+            store,
+            test_lifecycle_config(),
+            test_supervision_config(),
+        );
+
+        let agent_id = AgentId::new();
+        supervisor.handle_agent_session_ready(agent_id).await;
+        assert!(supervisor.token_trackers.contains_key(&agent_id));
+    }
+
+    #[tokio::test]
+    async fn agent_exit_cleans_up_token_tracker() {
+        let (event_tx, _) = broadcast::channel(16);
+        let (cmd_tx, _cmd_rx) = mpsc::channel(16);
+        let store = Arc::new(nephila_store::SqliteStore::open_in_memory(384).unwrap());
+
+        let agent_id = AgentId::new();
+        let objective_id = ObjectiveId::new();
+        let dir = std::path::PathBuf::from("/tmp/test");
+
+        let agent = nephila_core::agent::Agent::new(
+            agent_id,
+            objective_id,
+            dir,
+            nephila_core::agent::SpawnOrigin::Operator,
+            None,
+        );
+        store.register(agent).await.unwrap();
+
+        let mut supervisor = LifecycleSupervisor::new(
+            event_tx.subscribe(),
+            cmd_tx,
+            store,
+            test_lifecycle_config(),
+            test_supervision_config(),
+        );
+        supervisor.register_agent(agent_id);
+        assert!(supervisor.token_trackers.contains_key(&agent_id));
+
+        supervisor.handle_agent_exited(agent_id).await;
+        assert!(!supervisor.token_trackers.contains_key(&agent_id));
+    }
+
+    #[tokio::test]
+    async fn agent_exit_unknown_agent_does_not_panic() {
+        let (event_tx, _) = broadcast::channel(16);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
+        let store = Arc::new(nephila_store::SqliteStore::open_in_memory(384).unwrap());
+
+        let mut supervisor = LifecycleSupervisor::new(
+            event_tx.subscribe(),
+            cmd_tx,
+            store,
+            test_lifecycle_config(),
+            test_supervision_config(),
+        );
+
+        supervisor.handle_agent_exited(AgentId::new()).await;
+        assert!(cmd_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn run_exits_on_shutdown_event() {
+        let (event_tx, _) = broadcast::channel(16);
+        let (cmd_tx, _) = mpsc::channel(16);
+        let store = Arc::new(nephila_store::SqliteStore::open_in_memory(384).unwrap());
+
+        let mut supervisor = LifecycleSupervisor::new(
+            event_tx.subscribe(),
+            cmd_tx,
+            store,
+            test_lifecycle_config(),
+            test_supervision_config(),
+        );
+
+        event_tx.send(BusEvent::Shutdown).unwrap();
+        supervisor.run().await;
+        // If we reach here, the run loop correctly exited on Shutdown
+    }
+
+    #[tokio::test]
+    async fn run_exits_on_channel_close() {
+        let (event_tx, _) = broadcast::channel(16);
+        let (cmd_tx, _) = mpsc::channel(16);
+        let store = Arc::new(nephila_store::SqliteStore::open_in_memory(384).unwrap());
+
+        let mut supervisor = LifecycleSupervisor::new(
+            event_tx.subscribe(),
+            cmd_tx,
+            store,
+            test_lifecycle_config(),
+            test_supervision_config(),
+        );
+
+        drop(event_tx);
+        supervisor.run().await;
+    }
+
+    #[tokio::test]
     async fn restart_limit_prevents_respawn() {
         let (event_tx, _) = broadcast::channel(16);
         let (cmd_tx, mut cmd_rx) = mpsc::channel(16);
