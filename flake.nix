@@ -31,7 +31,13 @@
       fenixPkgs,
       craneLib,
     }: let
-      src = craneLib.cleanCargoSource ./.;
+      src = pkgs.lib.cleanSourceWith {
+        src = ./.;
+        filter = path: type:
+          (craneLib.filterCargoSources path type)
+          || (builtins.baseNameOf path == "config" && type == "directory")
+          || (pkgs.lib.hasPrefix (toString ./. + "/config") path);
+      };
       onnxruntime-bin = pkgs.callPackage ./nix/onnxruntime.nix {};
 
       commonArgs = {
@@ -116,6 +122,18 @@
             typos
             touch $out
           '';
+
+        build-assets = pkgs.runCommand "build-assets-check" {} ''
+          for f in \
+            ${src}/config/agent_system_prompt.md \
+            ${src}/config/ferrex.toml; do
+            if [ ! -f "$f" ]; then
+              echo "missing build asset: $f"
+              exit 1
+            fi
+          done
+          touch $out
+        '';
 
         nix-fmt =
           pkgs.runCommand "nix-fmt-check" {
