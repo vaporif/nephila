@@ -2446,6 +2446,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "nephila-core",
+ "nephila-store",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
