@@ -26,6 +26,15 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+blake3 = { workspace = true }
+dashmap = { workspace = true }
+futures = { workspace = true }
+nix = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+criterion = { workspace = true }
+
+[[bench]]
+name = "subscribe_after_throughput"
+harness = false

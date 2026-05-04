@@ -98,6 +98,12 @@ CREATE TABLE IF NOT EXISTS aggregate_snapshots (
     PRIMARY KEY (aggregate_type, aggregate_id, sequence)
 );
 
+CREATE TABLE IF NOT EXISTS blobs (
+    hash TEXT PRIMARY KEY,
+    payload BLOB NOT NULL,
+    original_len INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS spans (
     span_id TEXT PRIMARY KEY,
     trace_id TEXT NOT NULL,

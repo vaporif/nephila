@@ -860,6 +860,17 @@ impl App {
                 agent_id,
                 checkpoint_id,
             } => {
+                // Slice-1b step 18a: the MCP handler no longer emits
+                // CheckpointSaved; the connector reader emits
+                // SessionEvent::CheckpointReached instead. If we observe
+                // a legacy emission here, something is producing it that
+                // shouldn't be — log and surface to operator.
+                tracing::warn!(
+                    target: "nephila_tui::bus",
+                    %agent_id,
+                    %checkpoint_id,
+                    "legacy CheckpointSaved bus event observed — should be unreachable after slice-1b",
+                );
                 self.event_log
                     .push(format!("[{agent_id}] checkpoint saved: {checkpoint_id}"));
             }
