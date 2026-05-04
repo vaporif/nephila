@@ -95,6 +95,7 @@ impl SessionPane {
     /// detached tokio task so the TUI tick loop never blocks on stdin write
     /// backpressure (the connector's mpsc bound is 16; `send_turn` only ever
     /// awaits when 16 turns are already inflight).
+    #[tracing::instrument(level = "debug", skip(self, text), fields(len = text.len()))]
     pub fn submit_text(&self, text: String) {
         let Some(session) = self.session.clone() else {
             tracing::warn!(

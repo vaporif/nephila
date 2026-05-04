@@ -43,6 +43,11 @@ pub struct PumpChannels {
 /// updates and HITL requests fan out via the optional senders in `chans`.
 /// Returns the `JoinHandle` so callers can shut the pump down deterministically.
 #[must_use]
+#[tracing::instrument(
+    level = "debug",
+    skip(store, buffer, chans),
+    fields(%agent_id, aggregate_id = %session_aggregate_id),
+)]
 pub fn spawn_pump(
     store: Arc<SqliteStore>,
     agent_id: AgentId,

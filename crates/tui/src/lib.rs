@@ -269,8 +269,10 @@ impl App {
             &mut self.agent_tree,
         );
 
+        // The session pane is the primary panel in this layout; treat it as
+        // focused unless the operator has Tabbed away to AgentTree or EventLog.
         self.session_pane.focused =
-            matches!(self.focus, FocusPanel::ObjectiveTree) || self.session_focus.is_some();
+            !matches!(self.focus, FocusPanel::AgentTree | FocusPanel::EventLog);
         frame.render_widget(&self.session_pane, layout.session_pane);
 
         frame.render_stateful_widget(
