@@ -169,6 +169,7 @@ impl SessionRegistry {
     /// `ClaudeCodeSession::start`, appends `AgentSessionAssigned` and
     /// `AgentConfigSnapshotted` to the agent aggregate, fires `started_tx`,
     /// and installs the per-session crash-watch task.
+    #[tracing::instrument(level = "debug", skip(self, agent), fields(agent_id = %agent.id))]
     pub async fn ensure_session(
         self: &Arc<Self>,
         agent: &Agent,
@@ -318,6 +319,7 @@ impl SessionRegistry {
     /// Handle a crash — drop the old handle, resume via
     /// `ClaudeCodeSession::resume`, install the new handle. Idempotent on
     /// `crash_seq` to deduplicate replay/Lagged-recovery deliveries.
+    #[tracing::instrument(level = "debug", skip(self), fields(%agent_id, crash_seq))]
     pub async fn on_crash(self: &Arc<Self>, agent_id: AgentId, crash_seq: u64) {
         let lock = self
             .respawn_states
@@ -410,6 +412,7 @@ impl SessionRegistry {
     /// Slice 4 step 5: scan `list_agents_in_active_phase` and resume each
     /// agent that has a known `session_id`. Failures transition the agent to
     /// `Failed` via the agent reducer.
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn on_startup(self: &Arc<Self>) -> Result<(), RegistryError> {
         let agents = self
             .store
@@ -444,12 +447,9 @@ impl SessionRegistry {
                 }
                 Err(e) => {
                     tracing::error!(%agent.id, %session_id, %e, "on_startup resume failed; marking agent failed");
-                    if let Err(e2) = nephila_core::store::AgentStore::update_state(
-                        &*self.store,
-                        agent.id,
-                        nephila_core::agent::AgentState::Failed,
-                    )
-                    .await
+                    if let Err(e2) = self
+                        .mark_agent_failed(&agent, "session resume failed during on_startup")
+                        .await
                     {
                         tracing::error!(%agent.id, %e2, "failed to mark agent as Failed");
                     }
@@ -457,6 +457,29 @@ impl SessionRegistry {
             }
         }
 
+        Ok(())
+    }
+
+    /// Transition an agent to `Failed` through the event-sourced path:
+    /// `AgentCommand::Fail` produces `AgentEvent::StateChanged` (and a
+    /// `DirectiveChanged` companion in some arms); we append those events to
+    /// the event log AND persist the resulting projection via `AgentStore::save`
+    /// so the SQL row and event log stay in sync.
+    async fn mark_agent_failed(&self, agent: &Agent, reason: &str) -> Result<(), RegistryError> {
+        let events = agent
+            .handle(nephila_core::agent::AgentCommand::Fail {
+                reason: reason.to_owned(),
+            })
+            .map_err(|e| RegistryError::Store(format!("agent.handle(Fail): {e}")))?;
+        self.append_agent_events(agent.id, &events)
+            .await
+            .map_err(|e| RegistryError::Store(format!("append agent events: {e}")))?;
+        let projected = events
+            .iter()
+            .fold(agent.clone(), |acc, ev| acc.apply_event(ev));
+        nephila_core::store::AgentStore::save(&*self.store, &projected)
+            .await
+            .map_err(|e| RegistryError::Store(format!("AgentStore::save: {e}")))?;
         Ok(())
     }
 
@@ -557,6 +580,66 @@ mod tests {
         let blob = Arc::new(SqliteBlobReader::new(store.read_pool()));
         let reg = SessionRegistry::new(store, blob, defaults());
         assert_eq!(reg.session_count(), 0);
+    }
+
+    /// Slice 4 fix 2: `mark_agent_failed` writes through events — both the
+    /// agent event log AND the SQL projection reflect `Failed`. Verifies
+    /// `on_startup`'s failure branch is event-sourced.
+    #[tokio::test]
+    async fn mark_agent_failed_appends_event_and_updates_projection() {
+        use nephila_core::ObjectiveId;
+        use nephila_core::agent::{AgentCommand, AgentState, SpawnOrigin};
+        use nephila_core::store::AgentStore;
+
+        let store = Arc::new(SqliteStore::open_in_memory(384).unwrap());
+        let blob = Arc::new(SqliteBlobReader::new(store.read_pool()));
+        let reg = SessionRegistry::new(store.clone(), blob, defaults());
+
+        // Build an Active agent (agent must not be terminal for `Fail` to apply).
+        let mut agent = Agent::new(
+            AgentId::new(),
+            ObjectiveId::new(),
+            std::path::PathBuf::from("/tmp"),
+            SpawnOrigin::Operator,
+            None,
+        );
+        let activate_events = agent.handle(AgentCommand::Activate).unwrap();
+        agent = activate_events.iter().fold(agent, |a, e| a.apply_event(e));
+        store.register(agent.clone()).await.unwrap();
+        AgentStore::update_state(&*store, agent.id, AgentState::Active)
+            .await
+            .unwrap();
+
+        reg.mark_agent_failed(&agent, "test")
+            .await
+            .expect("mark_agent_failed");
+
+        // Projection reflects Failed.
+        let after = store.get(agent.id).await.unwrap().unwrap();
+        assert_eq!(after.state, AgentState::Failed);
+
+        // Event log contains a StateChanged event with new_state = Failed.
+        let events = store
+            .load_events("agent", &agent.id.to_string(), 0)
+            .await
+            .unwrap();
+        let saw_failed = events.iter().any(|env| {
+            serde_json::from_value::<AgentEvent>(env.payload.clone())
+                .ok()
+                .is_some_and(|ev| {
+                    matches!(
+                        ev,
+                        AgentEvent::StateChanged {
+                            new_state: AgentState::Failed,
+                            ..
+                        }
+                    )
+                })
+        });
+        assert!(
+            saw_failed,
+            "expected StateChanged(new_state=Failed) in event log; got {events:?}",
+        );
     }
 
     /// Termination contract: the per-session crash-watch task MUST exit when

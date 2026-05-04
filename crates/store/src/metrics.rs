@@ -92,7 +92,7 @@ pub fn record_session_respawn(aggregate_id: &str) {
 pub fn record_session_fallback_to_session_id(aggregate_id: &str) {
     info!(
         target: TARGET,
-        metric = "session.fallback_to_session_id",
+        metric = "session.fallback_to_session_id_total",
         aggregate_id = aggregate_id,
         "session fallback to session_id (slice 4 wires this)",
     );

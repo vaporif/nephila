@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS agents (
     source_checkpoint_id TEXT,
     injected_message TEXT,
     session_id TEXT,
+    last_config_snapshot TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -151,7 +152,39 @@ pub fn register_sqlite_vec() {
 
 pub fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(SCHEMA)?;
+    apply_post_create_migrations(conn)?;
     Ok(())
+}
+
+/// Idempotent migrations applied after `CREATE TABLE IF NOT EXISTS`.
+///
+/// New columns added in later slices land here so existing databases pick
+/// them up without requiring a full rebuild. SQLite's `ALTER TABLE ... ADD
+/// COLUMN` errors with `duplicate column name` if the column already exists;
+/// we swallow that specific error so the migration is idempotent.
+fn apply_post_create_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // Slice 4: agents.last_config_snapshot — JSON-encoded `AgentConfigSnapshot`,
+    // populated by `AgentEvent::AgentConfigSnapshotted` reducer projections.
+    add_column_if_missing(conn, "agents", "last_config_snapshot", "TEXT")?;
+    Ok(())
+}
+
+fn add_column_if_missing(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    column_type: &str,
+) -> Result<(), rusqlite::Error> {
+    let sql = format!("ALTER TABLE {table} ADD COLUMN {column} {column_type}");
+    match conn.execute(&sql, []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(msg)))
+            if msg.contains("duplicate column name") =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 pub fn init_vec_tables(conn: &Connection, dimension: usize) -> Result<(), rusqlite::Error> {

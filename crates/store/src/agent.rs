@@ -1,11 +1,17 @@
 use crate::SqliteStore;
 use crate::util::parse_rfc3339;
 use chrono::Utc;
-use nephila_core::agent::{Agent, AgentState, SpawnOrigin};
+use nephila_core::agent::{Agent, AgentConfigSnapshot, AgentState, SpawnOrigin};
 use nephila_core::directive::Directive;
 use nephila_core::id::{AgentId, CheckpointId};
 use nephila_core::store::AgentStore;
 use std::path::PathBuf;
+
+/// JSON-encode `last_config_snapshot` for SQL storage. Returns `None` so the
+/// column stays NULL when the agent has no snapshot yet.
+fn encode_snapshot(snap: Option<&AgentConfigSnapshot>) -> Option<String> {
+    snap.and_then(|s| serde_json::to_string(s).ok())
+}
 
 impl AgentStore for SqliteStore {
     async fn register(&self, agent: Agent) -> nephila_core::Result<()> {
@@ -20,9 +26,10 @@ impl AgentStore for SqliteStore {
                     } => ("fork", Some(*source_agent_id), Some(*source_checkpoint_id)),
                 };
 
+                let snapshot_json = encode_snapshot(agent.last_config_snapshot.as_ref());
                 conn.execute(
-                    "INSERT INTO agents (id, state, directive, directory, objective_id, checkpoint_id, restore_checkpoint_id, spawned_by, spawn_origin_type, source_checkpoint_id, injected_message, session_id, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    "INSERT INTO agents (id, state, directive, directory, objective_id, checkpoint_id, restore_checkpoint_id, spawned_by, spawn_origin_type, source_checkpoint_id, injected_message, session_id, last_config_snapshot, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                     rusqlite::params![
                         agent.id,
                         agent.state.to_string(),
@@ -36,6 +43,7 @@ impl AgentStore for SqliteStore {
                         source_cp,
                         agent.injected_message,
                         agent.session_id,
+                        snapshot_json,
                         agent.created_at.to_rfc3339(),
                         agent.updated_at.to_rfc3339(),
                     ],
@@ -51,7 +59,7 @@ impl AgentStore for SqliteStore {
             .writer
             .execute(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id
+                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id, last_config_snapshot
                      FROM agents WHERE id = ?1",
                 )?;
                 let result = stmt.query_row(rusqlite::params![id], row_to_agent);
@@ -70,7 +78,7 @@ impl AgentStore for SqliteStore {
             .writer
             .execute(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id
+                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id, last_config_snapshot
                      FROM agents ORDER BY created_at",
                 )?;
                 let rows = stmt
@@ -90,13 +98,14 @@ impl AgentStore for SqliteStore {
         let checkpoint_id = agent.checkpoint_id;
         let restore_checkpoint_id = agent.restore_checkpoint_id;
         let injected_message = agent.injected_message.clone();
+        let snapshot_json = encode_snapshot(agent.last_config_snapshot.as_ref());
         let now = agent.updated_at.to_rfc3339();
 
         self.writer
             .execute(move |conn| {
                 let rows = conn.execute(
-                    "UPDATE agents SET state = ?1, directive = ?2, session_id = ?3, checkpoint_id = ?4, restore_checkpoint_id = ?5, injected_message = ?6, updated_at = ?7 WHERE id = ?8",
-                    rusqlite::params![state, directive, session_id, checkpoint_id, restore_checkpoint_id, injected_message, now, id],
+                    "UPDATE agents SET state = ?1, directive = ?2, session_id = ?3, checkpoint_id = ?4, restore_checkpoint_id = ?5, injected_message = ?6, last_config_snapshot = ?7, updated_at = ?8 WHERE id = ?9",
+                    rusqlite::params![state, directive, session_id, checkpoint_id, restore_checkpoint_id, injected_message, snapshot_json, now, id],
                 )?;
                 if rows == 0 {
                     return Err(rusqlite::Error::QueryReturnedNoRows);
@@ -242,7 +251,7 @@ impl SqliteStore {
             .writer
             .execute(|conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id
+                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id, last_config_snapshot
                      FROM agents
                      WHERE state IN ('starting', 'active', 'paused', 'suspending')
                      ORDER BY created_at",
@@ -267,6 +276,13 @@ fn row_to_agent(row: &rusqlite::Row) -> Result<Agent, rusqlite::Error> {
         .get::<_, Option<String>>(9)?
         .unwrap_or_else(|| "continue".to_string());
     let session_id: Option<String> = row.get(10)?;
+    let snapshot_json: Option<String> = row.get(14)?;
+    let last_config_snapshot: Option<AgentConfigSnapshot> = match snapshot_json {
+        Some(s) => serde_json::from_str(&s).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(14, rusqlite::types::Type::Text, Box::new(e))
+        })?,
+        None => None,
+    };
 
     Ok(Agent {
         id: row.get(0)?,
@@ -307,10 +323,7 @@ fn row_to_agent(row: &rusqlite::Row) -> Result<Agent, rusqlite::Error> {
         },
         children: Vec::new(),
         injected_message,
-        // Slice-4 `last_config_snapshot` is not yet persisted in the agents
-        // SQL table — agents loaded from the row keep `None` and fall back
-        // to defaults via `cfg_from(agent)` (which warns).
-        last_config_snapshot: None,
+        last_config_snapshot,
         created_at: parse_rfc3339(&created_str)?,
         updated_at: parse_rfc3339(&updated_str)?,
     })
@@ -397,6 +410,71 @@ mod tests {
         let store = SqliteStore::open_in_memory(384).unwrap();
         let agents = store.list().await.unwrap();
         assert!(agents.is_empty());
+    }
+
+    /// Slice 4 fix 1: `last_config_snapshot` survives an SQL round-trip
+    /// through `register` → `get`. Previously hardcoded to `None` in
+    /// `row_to_agent`, defeating the per-agent persistence intent.
+    #[tokio::test]
+    async fn last_config_snapshot_round_trips_through_register_get() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let mut agent = make_agent();
+        let snap = AgentConfigSnapshot {
+            working_dir: PathBuf::from("/agent/work"),
+            mcp_endpoint: "http://stub:1234".into(),
+            permission_mode: "bypassPermissions".into(),
+            claude_binary: PathBuf::from("/usr/local/bin/claude"),
+        };
+        agent.last_config_snapshot = Some(snap.clone());
+        let id = agent.id;
+        store.register(agent).await.unwrap();
+        let fetched = store.get(id).await.unwrap().unwrap();
+        assert_eq!(fetched.last_config_snapshot.as_ref(), Some(&snap));
+    }
+
+    /// `save` updates the snapshot field on an existing row.
+    #[tokio::test]
+    async fn last_config_snapshot_updated_via_save() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let agent = make_agent();
+        let id = agent.id;
+        store.register(agent).await.unwrap();
+
+        let mut fetched = store.get(id).await.unwrap().unwrap();
+        assert!(fetched.last_config_snapshot.is_none());
+
+        let snap = AgentConfigSnapshot {
+            working_dir: PathBuf::from("/agent/work"),
+            mcp_endpoint: "http://stub".into(),
+            permission_mode: "bypassPermissions".into(),
+            claude_binary: PathBuf::from("/bin/claude"),
+        };
+        fetched.last_config_snapshot = Some(snap.clone());
+        store.save(&fetched).await.unwrap();
+
+        let after = store.get(id).await.unwrap().unwrap();
+        assert_eq!(after.last_config_snapshot.as_ref(), Some(&snap));
+    }
+
+    /// Snapshot also round-trips through `list_agents_in_active_phase`.
+    #[tokio::test]
+    async fn last_config_snapshot_preserved_in_active_phase_listing() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+        let mut agent = make_agent();
+        let snap = AgentConfigSnapshot {
+            working_dir: PathBuf::from("/x"),
+            mcp_endpoint: "http://x".into(),
+            permission_mode: "bypassPermissions".into(),
+            claude_binary: PathBuf::from("/x/claude"),
+        };
+        agent.last_config_snapshot = Some(snap.clone());
+        let id = agent.id;
+        store.register(agent).await.unwrap();
+        store.update_state(id, AgentState::Active).await.unwrap();
+
+        let agents = store.list_agents_in_active_phase().await.unwrap();
+        let found = agents.iter().find(|a| a.id == id).expect("active agent");
+        assert_eq!(found.last_config_snapshot.as_ref(), Some(&snap));
     }
 
     #[tokio::test]
