@@ -105,3 +105,19 @@ tempfile = "3"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Hashing
+blake3 = "1"
+
+# Concurrent collections / streams
+dashmap = "6"
+futures = "0.3"
+
+# Process signals
+nix = { version = "0.30", features = ["signal", "fs"] }
+
+# Benchmarks
+criterion = "0.7"
+
+# Property-based testing
+proptest = "1"

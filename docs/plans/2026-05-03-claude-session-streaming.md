@@ -886,7 +886,7 @@ Expected: green. Commit: `slice-1a: ClaudeCodeSession transport (reader/writer/c
 - Create: `crates/eventsourcing/tests/session_apply.rs` — reducer property tests
 - Create: `crates/store/tests/subscribe_after_ordering.rs` — listener-first ordering, lagged recovery, dedup
 
-- [ ] **Step 1: Define `SessionEvent` and round-trip serde test.**
+- [x] **Step 1: Define `SessionEvent` and round-trip serde test.**
 
 `crates/core/src/session_event.rs`:
 
@@ -942,7 +942,7 @@ Test: round-trip every variant via `serde_json::to_string` + `from_str`, assert 
 
 Run: `cargo test -p nephila-core session_event_serde -- --nocapture`. Expected: FAIL (file doesn't exist) → PASS after the `serde` derives compile.
 
-- [ ] **Step 2: Define `Session` aggregate and write `apply` invariant tests.**
+- [x] **Step 2: Define `Session` aggregate and write `apply` invariant tests.**
 
 `crates/core/src/session.rs`:
 
@@ -1031,7 +1031,7 @@ Tests in `crates/eventsourcing/tests/session_apply.rs`:
 
 Implement those tests as `#[test] fn` units. Run: `cargo test -p nephila-eventsourcing session_apply`. Expected FAIL initially.
 
-- [ ] **Step 3: Implement `Session::apply`.**
+- [x] **Step 3: Implement `Session::apply`.**
 
 ```rust
 fn apply(mut self, event: &SessionEvent) -> Self {
@@ -1100,7 +1100,7 @@ Add to step 2's invariant test list a new case 7: "After replaying N envelopes w
 
 Run: `cargo test -p nephila-eventsourcing session_apply`. Expected: PASS.
 
-- [ ] **Step 4: Change `EventEnvelope::sequence` semantics to "stamped by store".**
+- [x] **Step 4: Change `EventEnvelope::sequence` semantics to "stamped by store".**
 
 Decide between the two options:
 
@@ -1168,7 +1168,7 @@ async fn writer_handles_gapped_pre_existing_rows_by_continuing_from_max() {
 
 `raw_seed_for_test` is `#[cfg(test)]`-only and inserts rows via a direct `rusqlite::Connection::execute`, bypassing the writer. Add it to `crates/store/src/domain_event.rs` behind `#[cfg(any(test, feature = "test-seam"))]`.
 
-- [ ] **Step 5: Add the new trait methods to `DomainEventStore`.**
+- [x] **Step 5: Add the new trait methods to `DomainEventStore`.**
 
 Edit `crates/eventsourcing/src/store.rs`:
 
@@ -1205,7 +1205,7 @@ pub trait DomainEventStore: Send + Sync {
 
 (The `Pin<Box<dyn Stream>>` shape is the simplest stable signature given Rust's current async-trait + RPIT-in-traits limitations. If the codebase already uses `async-trait` macro elsewhere, switch to that — `rg async_trait` to check.)
 
-- [ ] **Step 6: Implement `subscribe_after` listener-first ordering.**
+- [x] **Step 6: Implement `subscribe_after` listener-first ordering.**
 
 `crates/store/src/subscribe.rs`:
 
@@ -1310,7 +1310,7 @@ async fn subscribe_after(&self, agg_type: &str, agg_id: &str, since: u64)
 
 **Dedup invariant:** in Live mode, every envelope with `sequence <= head_at_subscribe` is dropped silently — those events were already delivered via backfill. **Lagged invariant:** Lagged is impossible in Backfill (events come from disk) and recoverable in Live (resilient_subscribe restarts from last delivered seq).
 
-- [ ] **Step 7: Add a separate read-only connection pool for backfill.**
+- [x] **Step 7: Add a separate read-only connection pool for backfill.**
 
 Edit `crates/store/src/lib.rs`. Today `SqliteStore` holds one writer connection. Add `read_pool: Arc<Mutex<Vec<rusqlite::Connection>>>` (size 4) opened with `OpenFlags::SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_FULL_MUTEX`. `PRAGMA synchronous = NORMAL;` set on the writer connection only — readers don't write. Set `PRAGMA journal_mode = WAL;` (likely already set — verify).
 
@@ -1350,7 +1350,7 @@ The pre-existing `DomainEventStore::load_events` still routes through the writer
 
 Test: `crates/store/tests/read_pool_concurrent.rs` — write 100 events on the writer, spin up 8 concurrent `load_events_from_pool` calls, assert each gets the same set of events and no `database is locked` error appears. Also assert that with the writer thread parked (e.g. via a fake-blocking append in flight), backfill calls still complete — the read pool is independent.
 
-- [ ] **Step 8: Implement `append_batch` with sequence stamping inside the writer thread.**
+- [x] **Step 8: Implement `append_batch` with sequence stamping inside the writer thread.**
 
 The current `WriterHandle::execute(F: FnOnce(&Connection) + Send + 'static)` API takes a one-shot closure that gets a `&Connection` but no persistent thread-local state. The lazy `next_sequence` cache cannot live as a captured local in such a closure (it would be empty on every call) and cannot live on the `WriterHandle` struct (the OS thread, not the handle, owns the connection and any cache).
 
@@ -1420,7 +1420,7 @@ fn writer_thread(conn: Connection, mut rx: mpsc::Receiver<WriterCmd>, broadcasts
 
 `broadcast::Sender::send` is non-blocking (drops on full); the writer thread is not stalled by slow consumers.
 
-- [ ] **Step 9: Implement `prune_aggregate`.**
+- [x] **Step 9: Implement `prune_aggregate`.**
 
 ```rust
 async fn prune_aggregate(&self, agg_type: &str, agg_id: &str, before: u64) -> Result<u64, EventStoreError> {
@@ -1436,7 +1436,7 @@ async fn prune_aggregate(&self, agg_type: &str, agg_id: &str, before: u64) -> Re
 
 Test: append 10 events, prune below seq 5, assert `load_events(_, 0)` returns events 5..=10 only.
 
-- [ ] **Step 10: Add the blob spillover store.**
+- [x] **Step 10: Add the blob spillover store.**
 
 The blob store is split into a **read-only trait** (consumed by the pane / replay path via `Arc<dyn BlobReader>`) plus a **writer-thread-private insert path**. This is the only design that preserves "blob row INSERT and event row INSERT in the same SQLite transaction" — there is no standalone `BlobStore::put` method, because any standalone async writer would open a separate `rusqlite::Connection` and forfeit the same-transaction guarantee.
 
@@ -1480,7 +1480,7 @@ Verify `blake3` workspace dep with `cargo tree -p nephila-eventsourcing | rg bla
 
 Test: round-trip a 300 KiB blob through the writer (using the step 11 path, since there's no standalone `put`); idempotent re-insert via `INSERT OR IGNORE`; `get` for missing hash returns `NotFound`; `prepare_blob` is a pure function and unit-testable without any I/O.
 
-- [ ] **Step 11: Wire `ToolResult` payload spillover in the connector.**
+- [x] **Step 11: Wire `ToolResult` payload spillover in the connector.**
 
 Edit `crates/connector/src/session.rs::reader_task`. When emitting `ToolResult`, compute the `PreparedBlob` outside any closure (pure CPU), then submit it through a new `append_batch_with_blobs` writer-thread method that performs both inserts in one transaction:
 
@@ -1524,7 +1524,7 @@ Replace `drafts_tx: broadcast::Sender<SessionEventDraft>` with `store: Arc<dyn D
 
 The slice-1a smoke test (`session_smoke.rs`) gets rewritten to subscribe through `store` instead of `subscribe_drafts`. Run: `cargo test -p nephila-connector --test session_smoke`. Expected: PASS.
 
-- [ ] **Step 13: Ordering test — listener-first vs head-second.**
+- [x] **Step 13: Ordering test — listener-first vs head-second.**
 
 `crates/store/tests/subscribe_after_ordering.rs`:
 
@@ -1609,7 +1609,7 @@ assert!(stream.next().now_or_never().flatten().is_none());
 
 Test 2 (the existing bursts test): keeps probabilistic burst pattern as a smoke for non-pathological loads. Both tests must pass.
 
-- [ ] **Step 14: Implement Lagged recovery in the consumer helper.**
+- [x] **Step 14: Implement Lagged recovery in the consumer helper.**
 
 There's no good "automatic" recovery inside `subscribe_after` itself — recovering means starting a fresh subscription. Add `crates/store/src/resilient_subscribe.rs`:
 
@@ -1649,7 +1649,7 @@ on K=6 retries within 60s: escalate — emit `EventStoreError::PersistentLag` an
 
 Test: `crates/store/tests/resilient_subscribe_livelock.rs` — drive a burst that sustains for 90s, assert the helper escalates to `PersistentLag` on the 6th retry rather than cycling forever.
 
-- [ ] **Step 15: Observability — counters and spans.**
+- [x] **Step 15: Observability — counters and spans.**
 
 In `crates/eventsourcing/src/tracing.rs` (or a new `crates/store/src/metrics.rs` module), declare:
 
@@ -1668,7 +1668,7 @@ Backend: keep using whatever `crates/eventsourcing/src/tracing.rs` already wires
 
 In `subscribe_after`, wrap the logic in `tracing::info_span!("subscribe_after", since_sequence = since, head_at_subscribe = head, replayed_count = backfill.len(), aggregate_id = %agg_id)`.
 
-- [ ] **Step 16: Throughput benchmark gate.**
+- [x] **Step 16: Throughput benchmark gate.**
 
 `crates/store/benches/subscribe_after_throughput.rs` (Criterion):
 
@@ -1686,7 +1686,7 @@ Add `crates/store/Cargo.toml` `[dev-dependencies] criterion = "0.5"` and `[[benc
 
 Gate: p95 < 2s. The CI bench workflow (`.github/workflows/bench.yml`) runs `cargo bench -p nephila-store --bench subscribe_after_throughput` (NOT `--quick` — `--quick` produces too few samples for a meaningful p95) and fails the workflow when p95 ≥ 2s. The merge check on this PR is blocked until the workflow passes; there is no `(or manual)` escape hatch. For local iteration, `cargo bench ... -- --quick` is fine for fast feedback but not for the gate.
 
-- [ ] **Step 17: Snapshot trigger policy (split between connector and store).**
+- [x] **Step 17: Snapshot trigger policy (split between connector and store).**
 
 The spec gives two triggers; they live in different layers because `subscribe_after` is consumer-facing and the connector is producer-facing.
 
@@ -1703,7 +1703,7 @@ Tests:
 - Trigger A: drive a session through `SessionEnded`, assert a snapshot exists at `sequence == last_seq`.
 - Trigger B: append 1500 events without a `SessionEnded`, call `subscribe_after`, wait for the background task to settle, assert exactly one snapshot was written and that subsequent `subscribe_after` calls do NOT spawn another (the per-aggregate Mutex prevents thundering-herd snapshotting).
 
-- [ ] **Step 17b: Replay-determinism property test.**
+- [x] **Step 17b: Replay-determinism property test.**
 
 `crates/eventsourcing/tests/session_replay_determinism.rs` — proptest:
 - generate an arbitrary `Vec<SessionEvent>` (using a `proptest::Strategy` that emits valid sequences: SessionStarted, then any prompt/turn/checkpoint events, optionally SessionEnded);
@@ -1713,13 +1713,13 @@ Tests:
 - assert `s1 == s2` for all generated sequences (replay determinism invariant).
 Run: `cargo test -p nephila-eventsourcing --test session_replay_determinism`. Expected: PASS for ≥256 random sequences.
 
-- [ ] **Step 18: Default retention policy in `SessionRegistry` (placeholder for slice 4).**
+- [x] **Step 18: Default retention policy in `SessionRegistry` (placeholder for slice 4).**
 
 Add a stub `crates/store/src/retention.rs::session_retention_policy(store, session_id)` that on `SessionEnded`: takes a final snapshot, then `prune_aggregate("session", session_id, last_seq - 200)`. The actual scheduler (daily sweep) lands in slice 4 alongside the registry.
 
 Unit test: simulate a 1000-event session, run the policy, assert events 0..=799 are gone and 800..=999 remain.
 
-- [ ] **Step 18a: Suppress duplicate `BusEvent::CheckpointSaved` emission from the MCP handler.**
+- [x] **Step 18a: Suppress duplicate `BusEvent::CheckpointSaved` emission from the MCP handler.**
 
 Per spec: during the transition (slices 1b–5), `CheckpointReached` is emitted from the connector reader only — NOT from the MCP handler. The MCP handler currently emits `BusEvent::CheckpointSaved`; without this step, BOTH paths fire for every checkpoint and the TUI would render a double HITL modal (the existing modal handler doesn't deduplicate).
 
@@ -1735,11 +1735,11 @@ The TUI's `handle_bus_event` for `BusEvent::CheckpointSaved` is left in place bu
 
 Verification test: drive a checkpoint round-trip end-to-end against fake_claude with the MCP stub, count `BusEvent::CheckpointSaved` emissions on the bus — expected 0. Count `SessionEvent::CheckpointReached` events in the store — expected exactly 1 per checkpoint.
 
-- [ ] **Step 19: Cross-process lockfile (placeholder; full wiring in slice 4).**
+- [x] **Step 19: Cross-process lockfile (placeholder; full wiring in slice 4).**
 
 Add `crates/store/src/lockfile.rs` with a `WorkdirLock` RAII type that `flock`s `~/.nephila/<workdir-hash>.lock` on construction and releases on drop. Slice 4 wires it into `bin/orchestrator.rs::main`. Slice 1b only ships the type with unit tests (two concurrent `WorkdirLock::acquire` against the same hash → second returns error).
 
-- [ ] **Step 20: Final verify and commit.**
+- [x] **Step 20: Final verify and commit.**
 
 Run: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace && cargo bench -p nephila-store --bench subscribe_after_throughput -- --quick`. Expected: green; bench p95 < 2s.
 

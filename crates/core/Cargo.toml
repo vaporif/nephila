@@ -27,3 +27,4 @@ nephila-eventsourcing = { workspace = true }
 ferrex-core = { workspace = true }
 
 [dev-dependencies]
+proptest = { workspace = true }

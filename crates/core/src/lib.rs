@@ -9,6 +9,8 @@ pub mod event;
 pub mod id;
 pub mod interrupt;
 pub mod objective;
+pub mod session;
+pub mod session_event;
 #[cfg(feature = "rusqlite")]
 mod sql;
 pub mod store;
