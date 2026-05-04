@@ -2677,8 +2677,11 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "crossterm",
+ "futures",
  "nephila-connector",
  "nephila-core",
+ "nephila-eventsourcing",
+ "nephila-store",
  "ratatui",
  "serde",
  "serde_json",

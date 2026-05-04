@@ -1,3 +1,13 @@
+//! Layout primitives for the TUI.
+//!
+//! Two layouts coexist:
+//!   - [`AppLayout::compute_with_focus`] — original 2-row layout used when
+//!     no agent's session is focused (objectives + agents on top, event log
+//!     below).
+//!   - [`AppLayoutWithSession::compute`] — slice 2's three-column variant:
+//!     agent_tree (20%) | session_pane (60%) | event_log (20%). Operators
+//!     keep cross-agent visibility while focused on a single session.
+
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::BorderType;
@@ -61,6 +71,36 @@ impl AppLayout {
             agent_tree,
             event_log,
             hotkey_bar,
+        }
+    }
+}
+
+/// Three-column layout used when an agent's session is focused. Keeps the
+/// global event log visible (slim, 20%) so cross-agent activity stays
+/// observable. Per spec §SessionPane.Layout, the session pane is the wide
+/// center column at 60%; the agent tree is the slim left column at 20%.
+pub struct AppLayoutWithSession {
+    pub agent_tree: Rect,
+    pub session_pane: Rect,
+    pub event_log: Rect,
+    pub hotkey_bar: Rect,
+}
+
+impl AppLayoutWithSession {
+    #[must_use]
+    pub fn compute(area: Rect) -> Self {
+        let v = Layout::vertical([Constraint::Min(10), Constraint::Length(2)]).split(area);
+        let h = Layout::horizontal([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(v[0]);
+        Self {
+            agent_tree: h[0],
+            session_pane: h[1],
+            event_log: h[2],
+            hotkey_bar: v[1],
         }
     }
 }
