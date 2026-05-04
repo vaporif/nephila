@@ -8,6 +8,7 @@
 use crate::SqliteStore;
 use crate::blob::PreparedBlob;
 use crate::metrics;
+#[cfg(any(test, feature = "test-seam"))]
 use crate::subscribe::SubscribeAfterHooks;
 use crate::util::parse_rfc3339;
 use chrono::{DateTime, Utc};
@@ -183,13 +184,8 @@ impl DomainEventStore for SqliteStore {
         aggregate_id: &str,
         since_sequence: u64,
     ) -> Result<EventStream, EventStoreError> {
-        self.subscribe_after_with_hooks(
-            aggregate_type,
-            aggregate_id,
-            since_sequence,
-            SubscribeAfterHooks::default(),
-        )
-        .await
+        self.subscribe_after_inner(aggregate_type, aggregate_id, since_sequence, None)
+            .await
     }
 
     async fn prune_aggregate(
@@ -205,15 +201,17 @@ impl DomainEventStore for SqliteStore {
 }
 
 impl SqliteStore {
-    /// `subscribe_after` with test-only hooks injected between listener-attach
-    /// and head-snapshot. Production callers go through the trait method
-    /// (`SubscribeAfterHooks::default()`); tests use this directly.
-    pub async fn subscribe_after_with_hooks(
+    /// Internal `subscribe_after` implementation used by both the trait method
+    /// (production, no hook) and the gated `subscribe_after_with_hooks` (tests).
+    /// `pre_head_snapshot` is an optional callback invoked between the listener
+    /// attach and the head-sequence snapshot — the synchronisation seam used
+    /// to deterministically race appends against the head snapshot in tests.
+    async fn subscribe_after_inner(
         &self,
         aggregate_type: &str,
         aggregate_id: &str,
         since_sequence: u64,
-        hooks: SubscribeAfterHooks,
+        pre_head_snapshot: Option<&(dyn Fn() + Send + Sync)>,
     ) -> Result<EventStream, EventStoreError> {
         let span = info_span!(
             "subscribe_after",
@@ -231,7 +229,7 @@ impl SqliteStore {
             .subscribe();
 
         // Test seam: sleep / synchronise between listener-attach and head-snapshot.
-        if let Some(f) = hooks.pre_head_snapshot.as_ref() {
+        if let Some(f) = pre_head_snapshot {
             f();
         }
 
@@ -259,6 +257,35 @@ impl SqliteStore {
         // 5. Merge: yield backfill in order, then listener with seq > head, deduped.
         let stream = build_stream(backfill, listener, head);
         Ok(Box::pin(stream))
+    }
+
+    /// `subscribe_after` with test-only hooks injected between listener-attach
+    /// and head-snapshot. Gated behind `cfg(any(test, feature = "test-seam"))`
+    /// so it is absent from release builds (ADR-0002 / plan step 13).
+    /// Production callers go through the trait method.
+    #[cfg(any(test, feature = "test-seam"))]
+    pub async fn subscribe_after_with_hooks(
+        &self,
+        aggregate_type: &str,
+        aggregate_id: &str,
+        since_sequence: u64,
+        hooks: SubscribeAfterHooks,
+    ) -> Result<EventStream, EventStoreError> {
+        // Pull the hook out of the Arc. The lifetime of the trait object
+        // borrowed from `hooks.pre_head_snapshot` is bound by the hooks
+        // value, which lives until this `await` returns — long enough for
+        // `subscribe_after_inner` to invoke it.
+        match hooks.pre_head_snapshot.as_ref() {
+            Some(arc) => {
+                let f: &(dyn Fn() + Send + Sync) = arc.as_ref();
+                self.subscribe_after_inner(aggregate_type, aggregate_id, since_sequence, Some(f))
+                    .await
+            }
+            None => {
+                self.subscribe_after_inner(aggregate_type, aggregate_id, since_sequence, None)
+                    .await
+            }
+        }
     }
 
     /// Trigger B (consumer-side): if no snapshot exists or the latest
@@ -372,9 +399,11 @@ impl SqliteStore {
     /// the writer thread's stamping logic. Used by the upgrade-path
     /// regression tests in `tests/sequence_stamping_upgrade.rs`.
     ///
-    /// Hidden from rustdoc but kept always-public so integration tests
-    /// (which compile against the non-`cfg(test)` build of this crate) can
-    /// reach it. Not part of the stable API.
+    /// Gated behind `cfg(any(test, feature = "test-seam"))` so it is absent
+    /// from release builds (ADR-0002 / plan step 4). Integration tests under
+    /// `tests/` enable the feature via the self-referencing dev-dependency
+    /// in `crates/store/Cargo.toml`.
+    #[cfg(any(test, feature = "test-seam"))]
     #[doc(hidden)]
     pub async fn raw_seed_for_test(&self, agg_type: &str, agg_id: &str, sequences: &[u64]) {
         let agg_type = agg_type.to_owned();

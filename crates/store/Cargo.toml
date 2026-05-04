@@ -10,6 +10,12 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
+[features]
+# Exposes the test seams (`SubscribeAfterHooks`, `subscribe_after_with_hooks`,
+# `raw_seed_for_test`) needed by integration tests under `tests/`.
+# NOT enabled in release builds; the seams compile out entirely.
+test-seam = []
+
 [dependencies]
 nephila-core = { workspace = true, features = ["rusqlite"] }
 nephila-eventsourcing = { workspace = true }
@@ -34,6 +40,9 @@ nix = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 criterion = { workspace = true }
+# Self-reference so integration tests under `tests/` see the test-seam items.
+# `cargo test --workspace` enables this transparently.
+nephila-store = { path = ".", features = ["test-seam"] }
 
 [[bench]]
 name = "subscribe_after_throughput"

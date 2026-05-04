@@ -7,6 +7,7 @@
 
 use dashmap::DashMap;
 use nephila_eventsourcing::envelope::EventEnvelope;
+#[cfg(any(test, feature = "test-seam"))]
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -45,11 +46,16 @@ impl std::fmt::Debug for BroadcastRegistry {
 /// Test-only hooks injected into `subscribe_after` between listener-attach and
 /// head-snapshot. Used by the listener-first ordering test in
 /// `tests/subscribe_after_ordering.rs`.
+///
+/// Gated behind `cfg(any(test, feature = "test-seam"))` so it is absent from
+/// release builds (ADR-0002 / plan step 13).
+#[cfg(any(test, feature = "test-seam"))]
 #[derive(Default, Clone)]
 pub struct SubscribeAfterHooks {
     pub pre_head_snapshot: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
+#[cfg(any(test, feature = "test-seam"))]
 impl std::fmt::Debug for SubscribeAfterHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SubscribeAfterHooks")
