@@ -7,7 +7,7 @@
 
 use rusqlite::{Connection, OpenFlags};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReadPoolError {
@@ -74,9 +74,58 @@ impl ReadPool {
         guard.push(conn);
     }
 
+    /// Acquire a connection wrapped in an RAII guard that returns the
+    /// connection to the pool on drop — including drops triggered by
+    /// `panic!` inside `spawn_blocking`. Use this from any read path that
+    /// runs inside `spawn_blocking` or other panic-prone scopes; without
+    /// it, a panicking closure permanently leaks the connection and
+    /// eventually drains the pool to `PoolExhausted`.
+    pub fn acquire_guarded(self: &Arc<Self>) -> Result<PooledConn, ReadPoolError> {
+        let conn = self.acquire()?;
+        Ok(PooledConn {
+            pool: self.clone(),
+            conn: Some(conn),
+        })
+    }
+
     #[must_use]
     pub fn available(&self) -> usize {
         self.conns.lock().map(|g| g.len()).unwrap_or_default()
+    }
+}
+
+/// RAII wrapper around a pooled `Connection`. Returns the connection to the
+/// pool on `Drop` — including drops triggered by panics. Deref(Mut) gives
+/// callers transparent access to the underlying `Connection`.
+pub struct PooledConn {
+    pool: Arc<ReadPool>,
+    conn: Option<Connection>,
+}
+
+impl PooledConn {
+    /// Borrow the underlying connection. Panics if the guard has already
+    /// been consumed by `into_inner` (it never has internally — this is
+    /// defensive against misuse).
+    #[must_use]
+    pub fn as_conn(&self) -> &Connection {
+        self.conn
+            .as_ref()
+            .expect("PooledConn used after into_inner")
+    }
+}
+
+impl std::ops::Deref for PooledConn {
+    type Target = Connection;
+    fn deref(&self) -> &Self::Target {
+        self.as_conn()
+    }
+}
+
+impl Drop for PooledConn {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            self.pool.release(conn);
+        }
     }
 }
 

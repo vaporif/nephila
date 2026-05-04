@@ -305,19 +305,24 @@ impl SqliteStore {
             return;
         }
         let key = (agg_type.clone(), agg_id.clone());
-        if self.snapshot_locks.contains_key(&key) {
-            return; // another task is already snapshotting this aggregate
-        }
-        // Reserve the slot atomically; bail if a concurrent caller raced us.
+        // Atomically reserve the slot; bail if another task is already
+        // snapshotting this aggregate.
         if self.snapshot_locks.insert(key.clone(), ()).is_some() {
             return;
         }
+        // Construct the drop guard BEFORE `tokio::spawn` so it is moved into
+        // the spawned future already armed. If the closure panics on its
+        // first poll (or even before, during runtime worker pickup), the
+        // guard's `Drop` still fires and releases the lock — preventing a
+        // permanent leak that would suppress all future snapshot triggers
+        // for this aggregate.
+        let guard = SnapshotLockGuard {
+            locks: self.snapshot_locks.clone(),
+            key,
+        };
         let store = self.clone();
         tokio::spawn(async move {
-            let _drop_guard = SnapshotLockGuard {
-                locks: store.snapshot_locks.clone(),
-                key: key.clone(),
-            };
+            let _drop_guard = guard;
             if let Err(e) =
                 run_session_snapshot_task(&store, &agg_type, &agg_id, head_at_subscribe).await
             {
@@ -346,25 +351,28 @@ impl SqliteStore {
         let agg_type = agg_type.to_owned();
         let agg_id = agg_id.to_owned();
         tokio::task::spawn_blocking(move || -> Result<Vec<EventEnvelope>, EventStoreError> {
+            // RAII-guarded acquisition: the connection returns to the pool
+            // on drop even if the closure panics partway through (e.g.,
+            // OOM, FFI assert in rusqlite). Without this guard, a panic
+            // would permanently leak the connection.
             let conn = pool
-                .acquire()
+                .acquire_guarded()
                 .map_err(|_| EventStoreError::PoolExhausted)?;
-            let result: Result<Vec<EventEnvelope>, rusqlite::Error> = (|| {
-                let mut stmt = conn.prepare_cached(
-                    "SELECT id, aggregate_type, aggregate_id, sequence, event_type, payload, trace_id, outcome, timestamp, context_snapshot, metadata
-                     FROM domain_events
-                     WHERE aggregate_type = ?1 AND aggregate_id = ?2
-                       AND sequence > ?3 AND sequence <= ?4
-                     ORDER BY sequence ASC",
-                )?;
-                stmt.query_map(
+            let mut stmt = conn.prepare_cached(
+                "SELECT id, aggregate_type, aggregate_id, sequence, event_type, payload, trace_id, outcome, timestamp, context_snapshot, metadata
+                 FROM domain_events
+                 WHERE aggregate_type = ?1 AND aggregate_id = ?2
+                   AND sequence > ?3 AND sequence <= ?4
+                 ORDER BY sequence ASC",
+            ).map_err(|e| EventStoreError::Storage(e.to_string()))?;
+            let rows: Result<Vec<EventEnvelope>, rusqlite::Error> = stmt
+                .query_map(
                     rusqlite::params![agg_type, agg_id, since_exclusive as i64, head_inclusive as i64],
                     row_to_envelope,
-                )?
-                .collect()
-            })();
-            pool.release(conn);
-            result.map_err(|e| EventStoreError::Storage(e.to_string()))
+                )
+                .map_err(|e| EventStoreError::Storage(e.to_string()))?
+                .collect();
+            rows.map_err(|e| EventStoreError::Storage(e.to_string()))
         })
         .await
         .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?

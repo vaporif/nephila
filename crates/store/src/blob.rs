@@ -58,15 +58,18 @@ impl BlobReader for SqliteBlobReader {
         let pool = self.pool.clone();
         let hash = hash.to_owned();
         tokio::task::spawn_blocking(move || -> Result<Vec<u8>, BlobError> {
+            // RAII-guarded acquisition: the connection returns to the pool
+            // on drop even if `query_row` panics (e.g., OOM, FFI assert).
+            // A leaked connection would eventually drain the pool to
+            // `Exhausted` for all readers.
             let conn = pool
-                .acquire()
+                .acquire_guarded()
                 .map_err(|e| BlobError::Storage(e.to_string()))?;
             let result: Result<Vec<u8>, rusqlite::Error> = conn.query_row(
                 "SELECT payload FROM blobs WHERE hash = ?1",
                 rusqlite::params![&hash],
                 |row| row.get::<_, Vec<u8>>(0),
             );
-            pool.release(conn);
             match result {
                 Ok(bytes) => Ok(bytes),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Err(BlobError::NotFound),

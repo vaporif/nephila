@@ -241,29 +241,41 @@ fn handle_append(
         .map_err(|e| EventStoreError::Storage(e.to_string()))?;
     }
 
+    // Cache writes are deferred until AFTER `tx.commit()` succeeds. If the
+    // commit fails (disk full, SQLITE_BUSY, WAL stall), the durable MAX
+    // hasn't moved, so the in-memory cache must NOT move either; otherwise
+    // the next append would issue `stale_max + 1` and either trip the
+    // UNIQUE constraint or silently leave a permanent gap. Same-batch
+    // lookahead is served from `batch_max` so envelopes sharing an
+    // aggregate within one batch see consistent monotonic sequences without
+    // touching the durable cache.
     let mut assigned = Vec::with_capacity(envelopes.len());
+    let mut batch_max: HashMap<(String, String), u64> = HashMap::new();
     for env in &mut envelopes {
         debug_assert!(
             env.sequence == 0,
             "EventEnvelope::sequence must be 0 on append; writer stamps it (ADR-0002)"
         );
         let key = (env.aggregate_type.clone(), env.aggregate_id.clone());
-        let next = match next_sequence.get(&key) {
+        let next = match batch_max.get(&key) {
             Some(&n) => n + 1,
-            None => {
-                let from_disk: i64 = tx
-                    .query_row(
-                        "SELECT COALESCE(MAX(sequence), 0) FROM domain_events
-                         WHERE aggregate_type = ?1 AND aggregate_id = ?2",
-                        params![&env.aggregate_type, &env.aggregate_id],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| EventStoreError::Storage(e.to_string()))?;
-                from_disk as u64 + 1
-            }
+            None => match next_sequence.get(&key) {
+                Some(&n) => n + 1,
+                None => {
+                    let from_disk: i64 = tx
+                        .query_row(
+                            "SELECT COALESCE(MAX(sequence), 0) FROM domain_events
+                             WHERE aggregate_type = ?1 AND aggregate_id = ?2",
+                            params![&env.aggregate_type, &env.aggregate_id],
+                            |r| r.get(0),
+                        )
+                        .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+                    from_disk as u64 + 1
+                }
+            },
         };
         env.sequence = next;
-        next_sequence.insert(key, next);
+        batch_max.insert(key, next);
         assigned.push(next);
 
         let id = env.id.0.to_string();
@@ -297,11 +309,34 @@ fn handle_append(
         .map_err(|e| EventStoreError::Storage(e.to_string()))?;
     }
 
+    // Test seam: simulate a commit failure to exercise the cache-rollback
+    // path. The seam fires AFTER all per-row INSERTs but BEFORE the durable
+    // `tx.commit()`, so the failure is indistinguishable from a real disk /
+    // WAL commit error from the perspective of `next_sequence`.
+    #[cfg(any(test, feature = "test-seam"))]
+    if FORCE_COMMIT_FAILURE.load(std::sync::atomic::Ordering::SeqCst) {
+        FORCE_COMMIT_FAILURE.store(false, std::sync::atomic::Ordering::SeqCst);
+        return Err(EventStoreError::Storage("forced commit failure".into()));
+    }
+
     tx.commit()
         .map_err(|e| EventStoreError::Storage(e.to_string()))?;
 
+    // Commit succeeded; promote per-batch monotonic state into the durable
+    // writer-thread cache so subsequent appends start from this max.
+    for (k, v) in batch_max {
+        next_sequence.insert(k, v);
+    }
+
     Ok((assigned, envelopes))
 }
+
+/// Test seam: forces the next `handle_append` invocation to abort with a
+/// `Storage("forced commit failure")` after staging row INSERTs but before
+/// the durable `tx.commit()`. Single-shot — auto-resets on use.
+#[cfg(any(test, feature = "test-seam"))]
+pub static FORCE_COMMIT_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(test)]
 mod tests {
