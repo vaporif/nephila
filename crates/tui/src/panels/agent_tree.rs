@@ -1,5 +1,6 @@
 use nephila_core::agent::{Agent, AgentState};
 use nephila_core::id::{AgentId, CheckpointId, ObjectiveId};
+use nephila_core::session_event::SessionEvent;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -11,6 +12,47 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::layout::{focused_border_style, focused_border_type};
+
+/// Update sent by a per-agent pump task to refresh its row's activity glyph.
+/// The TUI tick loop drains the receiver before each render. Drops on full
+/// are acceptable — only the latest glyph matters.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentActivityUpdate {
+    pub agent_id: AgentId,
+    pub glyph: char,
+    pub last_event_kind: &'static str,
+}
+
+impl AgentActivityUpdate {
+    /// Derive an activity glyph from a fresh `SessionEvent`. Mapping mirrors
+    /// the spec's "running / checkpoint / crashed" buckets while keeping the
+    /// in-flight delta noise out of the agent tree.
+    #[must_use]
+    pub fn from_event(agent_id: AgentId, ev: &SessionEvent) -> Self {
+        let (glyph, kind) = match ev {
+            SessionEvent::SessionStarted { .. } => ('▶', "started"),
+            SessionEvent::HumanPromptQueued { .. } | SessionEvent::AgentPromptQueued { .. } => {
+                ('→', "prompt_queued")
+            }
+            SessionEvent::HumanPromptDelivered { .. }
+            | SessionEvent::AgentPromptDelivered { .. } => ('▶', "running"),
+            SessionEvent::AssistantMessage { .. } => ('▶', "running"),
+            SessionEvent::ToolCall { .. } => ('⚙', "tool_call"),
+            SessionEvent::ToolResult { .. } => ('↳', "tool_result"),
+            SessionEvent::CheckpointReached { .. } => ('✓', "checkpoint"),
+            SessionEvent::TurnCompleted { .. } => ('·', "idle"),
+            SessionEvent::TurnAborted { .. } => ('↺', "aborted"),
+            SessionEvent::SessionCrashed { .. } => ('✗', "crashed"),
+            SessionEvent::SessionEnded { .. } => ('▣', "ended"),
+            SessionEvent::PromptDeliveryFailed { .. } => ('!', "delivery_failed"),
+        };
+        Self {
+            agent_id,
+            glyph,
+            last_event_kind: kind,
+        }
+    }
+}
 
 fn state_color(state: &AgentState) -> Color {
     match state {
@@ -34,6 +76,13 @@ pub struct AgentTreeNode {
     pub session_id: Option<String>,
     pub directory: Option<PathBuf>,
     pub has_session: bool,
+    /// Slice 2: last `SessionEvent` kind observed by the agent's pump task,
+    /// e.g. `"running"`, `"checkpoint"`, `"crashed"`. Drives the activity
+    /// glyph rendered next to the agent's name.
+    pub last_session_event: Option<&'static str>,
+    /// Cached glyph derived from `last_session_event`. Stored alongside
+    /// the kind so the renderer doesn't have to map kind→glyph every frame.
+    pub activity_glyph: Option<char>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +182,8 @@ pub fn build_agent_trees(
                 session_id: None,
                 directory: Some(rec.directory.clone()),
                 has_session: false,
+                last_session_event: None,
+                activity_glyph: None,
             },
             children: Vec::new(),
             expanded: true,
@@ -212,8 +263,9 @@ impl StatefulWidget for AgentTreeWidget {
                 let hitl_mark = if item.data.hitl_pending { "[?] " } else { "" };
                 let color = state_color(&item.data.state);
                 let short_id = &item.data.id.to_string()[..8];
+                let glyph = item.data.activity_glyph.unwrap_or(' ');
                 let text = format!(
-                    "{indent}{arrow}{hitl_mark}{short_id} {} ({})",
+                    "{indent}{arrow}{hitl_mark}{glyph} {short_id} {} ({})",
                     item.data.objective_label, item.data.state
                 );
 
@@ -261,6 +313,8 @@ mod tests {
             session_id: None,
             directory: None,
             has_session: false,
+            last_session_event: None,
+            activity_glyph: None,
         }
     }
 
@@ -327,5 +381,33 @@ mod tests {
 
         let flat = flatten_tree(&root);
         assert_eq!(flat.len(), 1);
+    }
+
+    #[test]
+    fn activity_update_maps_event_kinds_to_glyphs() {
+        use chrono::Utc;
+        let aid = AgentId::new();
+
+        let started = SessionEvent::SessionStarted {
+            session_id: uuid::Uuid::new_v4(),
+            agent_id: aid,
+            model: None,
+            working_dir: PathBuf::from("/tmp"),
+            mcp_endpoint: "x".into(),
+            resumed: false,
+            ts: Utc::now(),
+        };
+        let u = AgentActivityUpdate::from_event(aid, &started);
+        assert_eq!(u.glyph, '▶');
+        assert_eq!(u.last_event_kind, "started");
+
+        let crashed = SessionEvent::SessionCrashed {
+            reason: "boom".into(),
+            exit_code: None,
+            ts: Utc::now(),
+        };
+        let u = AgentActivityUpdate::from_event(aid, &crashed);
+        assert_eq!(u.glyph, '✗');
+        assert_eq!(u.last_event_kind, "crashed");
     }
 }

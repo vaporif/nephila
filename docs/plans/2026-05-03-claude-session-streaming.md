@@ -1760,11 +1760,13 @@ Commit: `slice-1b: Session aggregate, subscribe_after/append_batch/prune, blob s
 - Modify: `crates/tui/Cargo.toml` — add `tui-textarea = "0.x"` (pin a recent version known to work with the workspace's `ratatui` minor)
 - Create: `crates/tui/tests/session_input_e2e.rs`
 
-- [ ] **Step 1: Add `tui-textarea` and bench-test it compiles against the workspace `ratatui`.**
+- [x] **Step 1: Add `tui-textarea` and bench-test it compiles against the workspace `ratatui`.**
 
 Run: `cargo build -p nephila-tui` after the dep add. Resolve any `ratatui` version conflict by pinning the same minor. If `tui-textarea` is incompatible, fall back to a hand-rolled multi-line buffer (a `Vec<String>` plus a cursor; ~150 lines). Document the choice in a code comment.
 
-- [ ] **Step 2: Write the failing TUI e2e test.**
+**Outcome:** `tui-textarea = "0.7"` pulls in `ratatui 0.29` (incompatible with workspace's `ratatui 0.30`). The `tui-textarea-2` fork at `0.11` works against `ratatui 0.30` but is a non-canonical crate name. Per the explicit fallback in this step, we hand-roll a `Vec<String>` + cursor multi-line buffer in `crates/tui/src/panels/session_pane/input.rs`. No workspace dep added.
+
+- [x] **Step 2: Write the failing TUI e2e test.**
 
 `crates/tui/tests/session_input_e2e.rs`:
 
@@ -1801,7 +1803,7 @@ async fn typing_in_pane_emits_human_prompt_events() {
 
 Run: `cargo test -p nephila-tui --test session_input_e2e`. Expected: FAIL.
 
-- [ ] **Step 3: Implement input/normal mode state machine.**
+- [x] **Step 3: Implement input/normal mode state machine.**
 
 `crates/tui/src/panels/session_pane/input.rs`:
 
@@ -1840,17 +1842,17 @@ pub enum InputAction { None, Submit(String), ClosePane, ReturnToGlobal, ScrollUp
 
 Unit-test the matrix: every (mode, key) combo above with the expected `InputAction`.
 
-- [ ] **Step 4: Wire pane → session.send_turn.**
+- [x] **Step 4: Wire pane → session.send_turn.**
 
 `SessionPane` holds `Arc<ClaudeCodeSession>`. On `InputAction::Submit(text)`, spawn `tokio::spawn(async move { session.send_turn(PromptSource::Human, text).await })`. Don't `await` inline — keeps the TUI tick loop responsive.
 
-- [ ] **Step 5: Per-agent pump task lifecycle.**
+- [x] **Step 5: Per-agent pump task lifecycle.**
 
 Spec §SessionPane.Pump-task lifecycle: one pump per agent, started when `SessionStarted` is observed by the registry, ended on `SessionEnded`. Pane reads from the per-agent buffer.
 
 Implement `SessionRegistry::on_session_started` — slice 4 owns the registry but slice 2 stubs it: when the demo bin starts a session, manually start a pump that calls `resilient_subscribe(store, "session", session_id, 0)` and pushes events into a `Mutex<VecDeque<RenderedRow>>` shared with the pane. **No cap on the VecDeque** (per spec).
 
-- [ ] **Step 6: Layout — three-column variant.**
+- [x] **Step 6: Layout — three-column variant.**
 
 Edit `crates/tui/src/layout.rs`:
 
@@ -1868,23 +1870,23 @@ impl AppLayoutWithSession {
 
 Switch between `AppLayout::compute_with_focus` and `AppLayoutWithSession::compute` based on a new `App::session_focus: Option<AgentId>` field.
 
-- [ ] **Step 7: Per-agent activity glyph in agent tree.**
+- [x] **Step 7: Per-agent activity glyph in agent tree.**
 
 Spec §SessionPane.Layout: each agent row gets a glyph reflecting its last `SessionEvent` type. Add `last_session_event: Option<&'static str>` to `AgentTreeNode` (kind str "running", "checkpoint", "crashed", etc.). The pump task updates it on every received event before storing the row. Render glyph in `crates/tui/src/panels/agent_tree.rs` next to the agent name.
 
 **Sync model:** the pump task does NOT mutate `AgentTreeNode` directly. Each pump task owns an `mpsc::Sender<AgentActivityUpdate>` (bound 16) consumed by the TUI tick loop on the main thread. `AgentActivityUpdate { agent_id: AgentId, glyph: char, last_event_kind: &'static str }`. The TUI's main `App` holds the `mpsc::Receiver` and drains all pending updates inside its `tick()` before each render. This prevents data races on `AgentTreeNode` and matches the existing `BusEvent` pattern. Drops on full are acceptable — only the latest glyph matters; intermediate glyphs are visual transient state.
 
-- [ ] **Step 8: HITL flow uses the existing modal.**
+- [x] **Step 8: HITL flow uses the existing modal.**
 
 When the pump observes `CheckpointReached { interrupt: Some(InterruptSnapshot::Hitl{question, options}), .. }`, push a `BusEvent::HitlRequested` (or call `App::open_hitl_modal` directly) — the existing `Modal::HitlResponse` flow at `crates/tui/src/modal.rs:86-117` handles the popup. The pane shows a marker row "↳ awaiting human input" but does not try to render the question inline.
 
 Test: drive fake_claude with a scenario that emits `CheckpointReached(Hitl)`, assert the modal opens.
 
-- [ ] **Step 9: Run e2e until green.**
+- [x] **Step 9: Run e2e until green.**
 
 Run: `cargo test -p nephila-tui --test session_input_e2e -- --nocapture`. Expected: PASS.
 
-- [ ] **Step 10: Verify and commit.**
+- [x] **Step 10: Verify and commit.**
 
 `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`. Commit: `slice-2: human prompt injection — input box, vim modes, three-column layout, per-agent pump`.
 

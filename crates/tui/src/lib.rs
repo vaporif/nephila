@@ -18,14 +18,23 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::goals::{GoalObjective, ObjectiveItem};
 use crate::input::FocusPanel;
-use crate::layout::AppLayout;
+use crate::layout::{AppLayout, AppLayoutWithSession};
 use crate::modal::Modal;
-use crate::panels::agent_tree::{AgentTreeState, AgentTreeWidget, TreePanelState};
+use crate::panels::agent_tree::{
+    AgentActivityUpdate, AgentTreeState, AgentTreeWidget, TreePanelState,
+};
 use crate::panels::event_log::{EventLogState, EventLogWidget};
 use crate::panels::hotkey_bar::{HotkeyBarWidget, HotkeyContext};
 use crate::panels::objective_tree::{ObjectiveTreeState, ObjectiveTreeWidget};
+use crate::panels::session_pane::SessionPane;
+use crate::panels::session_pane::pump::HitlRequest;
 use crate::tui_command::TuiCommand;
 use crate::tui_tracing::TuiLogBuffer;
+
+/// Bound on the activity-update channel. Pumps publish a glyph per
+/// `SessionEvent`; the App drains the receiver before each render. Drops on
+/// full are acceptable per spec — only the latest glyph matters.
+pub const ACTIVITY_CHANNEL_BOUND: usize = 16;
 
 pub struct App {
     event_rx: broadcast::Receiver<BusEvent>,
@@ -44,6 +53,21 @@ pub struct App {
     objective_tree: ObjectiveTreeState,
     agent_tree: AgentTreeState,
     event_log: EventLogState,
+    /// Slice 2: when `Some`, the embedded `SessionPane` is the focused panel
+    /// and the layout switches to the three-column variant.
+    session_focus: Option<AgentId>,
+    /// Slice 2: the embedded session panel. Slice 4 will swap this for a
+    /// per-agent pane index keyed by `AgentId`; for now there is at most one.
+    session_pane: SessionPane,
+    /// Receiver drained before each render. Slice 2 owns the `Sender` half
+    /// (cloned to each pump task on `SessionStarted`). Slice 4's
+    /// `SessionRegistry` will move ownership of the sender there.
+    activity_rx: mpsc::Receiver<AgentActivityUpdate>,
+    activity_tx: mpsc::Sender<AgentActivityUpdate>,
+    /// HITL request channel: pumps push when they observe a
+    /// `CheckpointReached(Hitl)`; the tick loop drains and opens the modal.
+    hitl_rx: mpsc::Receiver<HitlRequest>,
+    hitl_tx: mpsc::Sender<HitlRequest>,
 }
 
 impl App {
@@ -61,6 +85,8 @@ impl App {
         let mut objective_tree = ObjectiveTreeState::default();
         objective_tree.load_goals(&goals);
 
+        let (activity_tx, activity_rx) = mpsc::channel(ACTIVITY_CHANNEL_BOUND);
+        let (hitl_tx, hitl_rx) = mpsc::channel(ACTIVITY_CHANNEL_BOUND);
         Self {
             event_rx,
             cmd_tx,
@@ -78,7 +104,79 @@ impl App {
             objective_tree,
             agent_tree: TreePanelState::default(),
             event_log: EventLogState::default(),
+            session_focus: None,
+            session_pane: SessionPane::new(),
+            activity_rx,
+            activity_tx,
+            hitl_rx,
+            hitl_tx,
         }
+    }
+
+    /// Get a fresh `Sender<HitlRequest>` for a per-agent pump.
+    #[must_use]
+    pub fn hitl_sender(&self) -> mpsc::Sender<HitlRequest> {
+        self.hitl_tx.clone()
+    }
+
+    /// Drain pending HITL requests and pop the modal for the most recent one.
+    /// If multiple come in between ticks the older ones are stored in
+    /// `pending_hitl` so the operator can pick them up later via the
+    /// per-agent `Enter` keybind.
+    fn drain_hitl_requests(&mut self) {
+        let mut last: Option<HitlRequest> = None;
+        while let Ok(req) = self.hitl_rx.try_recv() {
+            self.pending_hitl
+                .insert(req.agent_id, (req.question.clone(), req.options.clone()));
+            if let Some(agent) = self.find_agent_mut(&req.agent_id) {
+                agent.hitl_pending = true;
+            }
+            last = Some(req);
+        }
+        if let Some(req) = last
+            && !self.modal.is_open()
+        {
+            self.modal = Modal::HitlResponse {
+                agent_id: req.agent_id,
+                question: req.question,
+                options: req.options,
+                selected: 0,
+            };
+        }
+    }
+
+    /// Get a fresh `Sender<AgentActivityUpdate>` to hand to a per-agent pump.
+    /// Cloned per pump; drops on a full channel are acceptable.
+    #[must_use]
+    pub fn activity_sender(&self) -> mpsc::Sender<AgentActivityUpdate> {
+        self.activity_tx.clone()
+    }
+
+    /// Drain pending activity updates and apply them to the agent tree.
+    /// Called from the tick loop before each render.
+    fn drain_activity_updates(&mut self) {
+        while let Ok(update) = self.activity_rx.try_recv() {
+            if let Some(agent) = self.find_agent_mut(&update.agent_id) {
+                agent.last_session_event = Some(update.last_event_kind);
+                agent.activity_glyph = Some(update.glyph);
+            }
+        }
+    }
+
+    /// Open the existing HITL modal for the given agent. Used by the pump
+    /// when a `CheckpointReached(Hitl{question, options})` event arrives.
+    pub fn open_hitl_modal(&mut self, agent_id: AgentId, question: String, options: Vec<String>) {
+        if let Some(agent) = self.find_agent_mut(&agent_id) {
+            agent.hitl_pending = true;
+        }
+        self.pending_hitl
+            .insert(agent_id, (question.clone(), options.clone()));
+        self.modal = Modal::HitlResponse {
+            agent_id,
+            question,
+            options,
+            selected: 0,
+        };
     }
 
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
@@ -87,6 +185,8 @@ impl App {
                 self.needs_clear = false;
                 terminal.clear()?;
             }
+            self.drain_activity_updates();
+            self.drain_hitl_requests();
             terminal.draw(|frame| self.draw(frame))?;
 
             if event::poll(Duration::from_millis(100))?
@@ -109,6 +209,18 @@ impl App {
     }
 
     fn draw(&mut self, frame: &mut Frame) {
+        if self.session_focus.is_some() {
+            self.draw_with_session(frame);
+        } else {
+            self.draw_overview(frame);
+        }
+        self.modal.render(frame.area(), frame.buffer_mut());
+        if self.show_debug {
+            self.render_debug_overlay(frame);
+        }
+    }
+
+    fn draw_overview(&mut self, frame: &mut Frame) {
         let layout =
             AppLayout::compute_with_focus(frame.area(), self.focus == FocusPanel::EventLog);
 
@@ -144,12 +256,41 @@ impl App {
             focus: self.focus,
         };
         frame.render_widget(hotkey_widget, layout.hotkey_bar);
+    }
 
-        self.modal.render(frame.area(), frame.buffer_mut());
+    fn draw_with_session(&mut self, frame: &mut Frame) {
+        let layout = AppLayoutWithSession::compute(frame.area());
 
-        if self.show_debug {
-            self.render_debug_overlay(frame);
-        }
+        frame.render_stateful_widget(
+            AgentTreeWidget {
+                focused: self.focus == FocusPanel::AgentTree,
+            },
+            layout.agent_tree,
+            &mut self.agent_tree,
+        );
+
+        // The session pane is the primary panel in this layout; treat it as
+        // focused unless the operator has Tabbed away to AgentTree or EventLog.
+        self.session_pane.focused =
+            !matches!(self.focus, FocusPanel::AgentTree | FocusPanel::EventLog);
+        frame.render_widget(&self.session_pane, layout.session_pane);
+
+        frame.render_stateful_widget(
+            EventLogWidget {
+                focused: self.focus == FocusPanel::EventLog,
+            },
+            layout.event_log,
+            &mut self.event_log,
+        );
+
+        let ctx = self.compute_hotkey_context();
+        let hitl_hint = self.hitl_hint_text();
+        let hotkey_widget = HotkeyBarWidget {
+            context: ctx,
+            hitl_hint,
+            focus: self.focus,
+        };
+        frame.render_widget(hotkey_widget, layout.hotkey_bar);
     }
 
     fn render_debug_overlay(&self, frame: &mut Frame) {
@@ -261,8 +402,18 @@ impl App {
             return;
         }
 
+        // Global Ctrl+C is the only override that survives session focus.
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.running = false;
+            return;
+        }
+
+        // Session-focused: route every other key through the pane's
+        // input/normal mode FSM. Global hotkeys like `q`, `Tab`, `n` are
+        // suppressed here — `q` in Normal mode closes the pane, `i` opens
+        // the editor, etc.
+        if self.session_focus.is_some() {
+            self.handle_session_pane_key(key);
             return;
         }
 
@@ -298,6 +449,25 @@ impl App {
             FocusPanel::ObjectiveTree => self.handle_objective_key(key).await,
             FocusPanel::AgentTree => self.handle_agent_tree_key(key).await,
             FocusPanel::EventLog => self.handle_event_log_key(key),
+        }
+    }
+
+    fn handle_session_pane_key(&mut self, key: KeyEvent) {
+        use crate::panels::session_pane::input::InputAction;
+        let action = self.session_pane.input.handle_key(key);
+        match action {
+            InputAction::None => {}
+            InputAction::Submit(text) => {
+                if !text.is_empty() {
+                    self.session_pane.submit_text(text);
+                }
+            }
+            InputAction::ClosePane | InputAction::ReturnToGlobal => {
+                self.session_focus = None;
+            }
+            InputAction::ScrollUp(_) | InputAction::ScrollDown(_) => {
+                // Slice 2 leaves scroll a no-op; spec defers to slice 6.
+            }
         }
     }
 
@@ -664,16 +834,25 @@ impl App {
                 if let Some(item) = self.agent_tree.selected() {
                     if item.data.hitl_pending {
                         self.try_open_hitl_modal(item.data.id);
-                    } else if let (Some(sid), Some(dir)) =
-                        (&item.data.session_id, &item.data.directory)
-                    {
-                        let aid = item.data.id;
-                        let first = !item.data.has_session;
-                        self.attach_agent_session(aid, sid.clone(), dir.clone(), first);
+                    } else if item.data.session_id.is_some() {
+                        // Slice 2: Enter focuses the embedded session pane.
+                        // The legacy TTY-handoff `attach_agent_session` moves
+                        // to hotkey `a` until the parity matrix closes
+                        // (slice 6/7).
+                        self.session_focus = Some(item.data.id);
                     } else {
                         self.event_log
                             .push("Agent has no session to attach to".into());
                     }
+                }
+            }
+            KeyCode::Char('a') => {
+                if let Some(item) = self.agent_tree.selected()
+                    && let (Some(sid), Some(dir)) = (&item.data.session_id, &item.data.directory)
+                {
+                    let aid = item.data.id;
+                    let first = !item.data.has_session;
+                    self.attach_agent_session(aid, sid.clone(), dir.clone(), first);
                 }
             }
             _ => {}
@@ -802,6 +981,8 @@ impl App {
                                 session_id: None,
                                 directory: None,
                                 has_session: false,
+                                last_session_event: None,
+                                activity_glyph: None,
                             },
                             depth: 0,
                             is_expanded: true,
