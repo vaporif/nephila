@@ -18,6 +18,12 @@
 //! call-recording fake. In production the only impl wraps `Arc<ClaudeCodeSession>`
 //! in a thin shim that translates the trait calls into `send_turn` / `pause` /
 //! `shutdown`.
+//!
+//! Slice 3 ships the state machine, the `SessionDriver` trait,
+//! [`run_per_session`], and the registry stub. The bridge from
+//! `SessionRegistry` → `run_per_session` lands in slice 4 (Task 6 step 5a)
+//! once `Agent::session_id` exists. Until then the supervisor is exercised
+//! only by `crates/lifecycle/tests/checkpoint_pairing.rs`'s proptest.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -100,15 +106,18 @@ pub enum SupervisorAction {
     Ended,
 }
 
-#[derive(Debug)]
 pub struct SessionSupervisor {
     sessions: HashMap<SessionId, PerSession>,
     supervision_config: SupervisionConfig,
+    store: Arc<SqliteStore>,
 }
 
-impl Default for SessionSupervisor {
-    fn default() -> Self {
-        Self::new(default_supervision_config())
+impl std::fmt::Debug for SessionSupervisor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionSupervisor")
+            .field("session_count", &self.sessions.len())
+            .field("supervision_config", &self.supervision_config)
+            .finish_non_exhaustive()
     }
 }
 
@@ -123,19 +132,28 @@ fn default_supervision_config() -> SupervisionConfig {
 
 impl SessionSupervisor {
     #[must_use]
-    pub fn new(supervision_config: SupervisionConfig) -> Self {
+    pub fn new(store: Arc<SqliteStore>, supervision_config: SupervisionConfig) -> Self {
         Self {
             sessions: HashMap::new(),
             supervision_config,
+            store,
         }
     }
 
-    /// Test-only constructor — the production constructor lives on
-    /// `LifecycleSupervisor` (which embeds this state machine alongside the
-    /// existing token tracking).
+    /// Accessor for the store used by [`run_per_session`] when re-anchoring
+    /// the per-session subscription.
+    #[must_use]
+    pub fn store(&self) -> Arc<SqliteStore> {
+        Arc::clone(&self.store)
+    }
+
+    /// Test-only constructor. Spins up an in-memory store so the proptest
+    /// harness can exercise the state machine without a tempdir or real
+    /// `subscribe_after` plumbing.
     #[must_use]
     pub fn new_for_test() -> Self {
-        Self::default()
+        let store = Arc::new(SqliteStore::open_in_memory(384).expect("test store opens in-memory"));
+        Self::new(store, default_supervision_config())
     }
 
     /// Test seam: register a session with a fake driver before driving events.
@@ -318,13 +336,11 @@ impl SessionSupervisor {
 /// The supervisor is shared across many such tasks via `Arc<Mutex<_>>`; each
 /// task locks briefly per event to dispatch and never holds the lock across
 /// `.await` boundaries (the `subscribe` `.next()` call happens BEFORE the
-/// lock is acquired).
-#[tracing::instrument(level = "debug", skip(store, supervisor), fields(session_id = %session_id))]
-pub async fn run_per_session(
-    store: Arc<SqliteStore>,
-    supervisor: Arc<Mutex<SessionSupervisor>>,
-    session_id: SessionId,
-) {
+/// lock is acquired). The store handle is read once at task entry under a
+/// short-lived lock and reused for the lifetime of the subscription.
+#[tracing::instrument(level = "debug", skip(supervisor), fields(session_id = %session_id))]
+pub async fn run_per_session(supervisor: Arc<Mutex<SessionSupervisor>>, session_id: SessionId) {
+    let store = supervisor.lock().await.store();
     let mut stream = resilient_subscribe(store, "session".into(), session_id.to_string(), 0);
     while let Some(item) = stream.next().await {
         match item {

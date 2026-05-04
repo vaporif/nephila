@@ -171,25 +171,26 @@ async fn main() -> Result<()> {
     // its first new-session notification.
     let session_registry = Arc::new(session_registry::SessionRegistry::new());
     let session_supervisor = Arc::new(tokio::sync::Mutex::new(
-        nephila_lifecycle::SessionSupervisor::new(config.supervision.clone()),
+        nephila_lifecycle::SessionSupervisor::new(sqlite_store.clone(), config.supervision.clone()),
     ));
     let session_supervisor_handle = {
         let registry = session_registry.clone();
         let _supervisor = session_supervisor.clone();
-        let _store = sqlite_store.clone();
         tokio::spawn(async move {
-            let mut new_sessions = registry.subscribe_session_started();
+            let mut new_agents_rx = registry.subscribe_session_started();
             loop {
-                match new_sessions.recv().await {
-                    Ok(_agent_id) => {
-                        // Slice 4 will look up the agent's session_id and spawn
-                        // `nephila_lifecycle::run_per_session(...)` here.
-                        tracing::debug!(
-                            "session_supervisor: new session notification (slice-4 will handle)"
-                        );
+                match new_agents_rx.recv().await {
+                    Ok(agent_id) => {
+                        // DEFERRED to slice 4 (Task 6 step 5a): wire JoinSet +
+                        // run_per_session. The agent_id → session_id lookup
+                        // requires the AgentSessionAssigned event, which slice 4
+                        // introduces. For now the SessionSupervisor is parked —
+                        // the legacy LifecycleSupervisor handles all session
+                        // traffic until the slice-4 cutover.
+                        tracing::debug!(%agent_id, "SessionSupervisor wiring deferred to slice 4");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(n, "session_supervisor lagged on new-session stream");
+                        tracing::warn!(%n, "SessionRegistry lagged");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }

@@ -281,7 +281,7 @@ mod tests {
         SupervisionConfig {
             default_strategy: "one_for_one".into(),
             max_restarts: 5,
-            restart_window_secs: 60,
+            restart_window_secs: 600,
             max_agent_depth: 3,
         }
     }

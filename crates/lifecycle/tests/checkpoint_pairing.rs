@@ -236,12 +236,20 @@ proptest! {
             last_observed_action_idx = after_actions.len();
         }
 
-        // Exhaustively scan actions: no double-shutdown / double-pause within a
-        // single drive (both are terminal/critical and we prefer single-issue).
+        // Exhaustively scan actions: no double-shutdown within a single drive
+        // (Drain transitions phase to Ended; subsequent events must short-circuit
+        // via `is_terminal`).
         let log = driver.log.lock().expect("log");
-        let shutdowns = log.actions.iter().filter(|a| matches!(a, RecordedAction::Shutdown)).count();
-        prop_assert!(shutdowns <= 1 + log.actions.iter().filter(|a| matches!(a, RecordedAction::Shutdown)).count(),
-            "sanity check: action log {:?}", log.actions);
+        let shutdowns = log
+            .actions
+            .iter()
+            .filter(|a| matches!(a, RecordedAction::Shutdown))
+            .count();
+        prop_assert!(
+            shutdowns <= 1,
+            "double-shutdown; actions = {:?}",
+            log.actions,
+        );
 
         // Expose the unused index so clippy doesn't warn.
         let _ = last_observed_action_idx;

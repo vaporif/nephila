@@ -339,6 +339,7 @@ impl ClaudeCodeSession {
     /// the child exits between this read and a subsequent syscall (e.g.
     /// `kill`). Returns `None` if the child has been reaped (post `shutdown`)
     /// or `Child::id()` has otherwise yielded `None`.
+    #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
     pub async fn pid(&self) -> Option<u32> {
         let guard = self.child.lock().await;
         guard.as_ref().and_then(Child::id)
