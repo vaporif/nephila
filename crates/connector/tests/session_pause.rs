@@ -63,6 +63,7 @@ async fn pause_halts_event_stream_then_resume_continues() {
         permission_mode: "bypassPermissions".into(),
         store: Arc::clone(&store),
         blob_reader,
+        crash_fallback_tx: None,
     };
 
     let session = ClaudeCodeSession::start(cfg).await.expect("start");

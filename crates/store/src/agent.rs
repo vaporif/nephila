@@ -232,6 +232,31 @@ impl AgentStore for SqliteStore {
     }
 }
 
+impl SqliteStore {
+    /// Slice 4: returns agents whose state is in an "active phase" — i.e.
+    /// `Starting`, `Active`, `Paused`, or `Suspending`. Used by
+    /// `SessionRegistry::on_startup` to decide which agents to resume after
+    /// an orchestrator restart.
+    pub async fn list_agents_in_active_phase(&self) -> nephila_core::Result<Vec<Agent>> {
+        let records = self
+            .writer
+            .execute(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id
+                     FROM agents
+                     WHERE state IN ('starting', 'active', 'paused', 'suspending')
+                     ORDER BY created_at",
+                )?;
+                let rows = stmt
+                    .query_map([], row_to_agent)?
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(rows)
+            })
+            .await?;
+        Ok(records)
+    }
+}
+
 fn row_to_agent(row: &rusqlite::Row) -> Result<Agent, rusqlite::Error> {
     let state_str: String = row.get(1)?;
     let dir_str: String = row.get(2)?;
@@ -282,6 +307,10 @@ fn row_to_agent(row: &rusqlite::Row) -> Result<Agent, rusqlite::Error> {
         },
         children: Vec::new(),
         injected_message,
+        // Slice-4 `last_config_snapshot` is not yet persisted in the agents
+        // SQL table — agents loaded from the row keep `None` and fall back
+        // to defaults via `cfg_from(agent)` (which warns).
+        last_config_snapshot: None,
         created_at: parse_rfc3339(&created_str)?,
         updated_at: parse_rfc3339(&updated_str)?,
     })
@@ -368,6 +397,37 @@ mod tests {
         let store = SqliteStore::open_in_memory(384).unwrap();
         let agents = store.list().await.unwrap();
         assert!(agents.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_agents_in_active_phase_filters_terminal_states() {
+        let store = SqliteStore::open_in_memory(384).unwrap();
+
+        let active = make_agent();
+        let active_id = active.id;
+        store.register(active.clone()).await.unwrap();
+        store
+            .update_state(active_id, AgentState::Active)
+            .await
+            .unwrap();
+
+        let exited = make_agent();
+        let exited_id = exited.id;
+        store.register(exited).await.unwrap();
+        store
+            .update_state(exited_id, AgentState::Exited)
+            .await
+            .unwrap();
+
+        let starting = make_agent();
+        let starting_id = starting.id;
+        store.register(starting).await.unwrap();
+
+        let agents = store.list_agents_in_active_phase().await.unwrap();
+        let ids: Vec<_> = agents.iter().map(|a| a.id).collect();
+        assert!(ids.contains(&active_id));
+        assert!(ids.contains(&starting_id));
+        assert!(!ids.contains(&exited_id));
     }
 
     #[tokio::test]

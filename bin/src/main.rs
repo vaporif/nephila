@@ -74,6 +74,13 @@ async fn main() -> Result<()> {
         config.nephila.sqlite_path = db;
     }
 
+    // Slice 4 (Task 6 step 4): cross-process lockfile. Held for the lifetime
+    // of `main`; second nephila against the same workdir errors out with the
+    // lock acquisition failure surfaced in stderr.
+    let workdir = std::env::current_dir().wrap_err("read current dir for workdir lock")?;
+    let _workdir_lock = nephila_store::lockfile::WorkdirLock::acquire(&workdir)
+        .map_err(|e| color_eyre::eyre::eyre!("another nephila is already running here: {e}"))?;
+
     let ferrex_config = build_ferrex_config(&config)?;
     let memory_service = ferrex_core::MemoryService::from_config(ferrex_config)
         .await
@@ -164,12 +171,32 @@ async fn main() -> Result<()> {
         })
     };
 
-    // Slice 3: stand up the new session-event-driven supervisor alongside the
-    // legacy `BusEvent`-driven one. The registry is empty until slice 4 wires
-    // the orchestrator's `spawn` path to call `registry.fire_started(agent_id)`
-    // — until then the session_supervisor_handle is a parked task waiting for
-    // its first new-session notification.
-    let session_registry = Arc::new(session_registry::SessionRegistry::new());
+    // Slice 4: stand up the new session-event-driven supervisor alongside the
+    // legacy `BusEvent`-driven one. The registry now owns sessions, watches
+    // for crashes via `subscribe_after`, and respawns through
+    // `ClaudeCodeSession::resume`.
+    let blob_reader = Arc::new(nephila_store::blob::SqliteBlobReader::new(
+        sqlite_store.read_pool(),
+    ));
+    let registry_defaults = session_registry::RegistryDefaults {
+        claude_binary: PathBuf::from(&config.connector.claude_binary),
+        mcp_endpoint: format!("http://{bound_addr}/mcp"),
+        permission_mode: "bypassPermissions".into(),
+    };
+    let session_registry = Arc::new(session_registry::SessionRegistry::new(
+        sqlite_store.clone(),
+        blob_reader,
+        registry_defaults,
+    ));
+    // Resume any agents in an active phase from a previous orchestrator run.
+    if let Err(e) = session_registry.on_startup().await {
+        tracing::warn!(%e, "SessionRegistry::on_startup failed");
+    }
+    // Wire the connector's crash-fallback channel into `on_crash`.
+    let _crash_fallback_handle = session_registry
+        .clone()
+        .start_crash_fallback_listener()
+        .await;
     let session_supervisor = Arc::new(tokio::sync::Mutex::new(
         nephila_lifecycle::SessionSupervisor::new(sqlite_store.clone(), config.supervision.clone()),
     ));

@@ -97,3 +97,18 @@ pub fn record_session_fallback_to_session_id(aggregate_id: &str) {
         "session fallback to session_id (slice 4 wires this)",
     );
 }
+
+/// Reader's `[TurnAborted, SessionCrashed]` `append_batch` itself failed.
+///
+/// When this metric increments the `SessionRegistry` will not observe a
+/// `SessionCrashed` envelope on its `subscribe_after` stream; the connector
+/// falls back to an mpsc channel so respawn still triggers.
+#[inline]
+pub fn record_crash_append_failed(aggregate_id: &str) {
+    info!(
+        target: TARGET,
+        metric = "session.crash_append_failed_total",
+        aggregate_id = aggregate_id,
+        "session crash event append failed (fallback channel used)",
+    );
+}

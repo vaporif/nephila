@@ -6,6 +6,7 @@ pub mod error;
 pub mod hitl;
 pub mod message;
 pub mod openai_compatible;
+pub mod resume;
 pub mod session;
 pub mod stream;
 pub mod task;

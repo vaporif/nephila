@@ -1,9 +1,23 @@
 use crate::directive::Directive;
 use crate::id::{AgentId, CheckpointId, ObjectiveId};
+use crate::session_event::SessionId;
 use chrono::{DateTime, Utc};
 use nephila_eventsourcing::aggregate::EventSourced;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+/// Persisted, non-volatile slice of `SessionConfig` — fields needed to
+/// re-spawn the session after an orchestrator restart. The volatile parts
+/// (`store`, `blob_reader`, `crash_fallback_tx`) are reattached from the
+/// running orchestrator at resume time; only the inputs the operator
+/// originally configured live here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentConfigSnapshot {
+    pub working_dir: PathBuf,
+    pub mcp_endpoint: String,
+    pub permission_mode: String,
+    pub claude_binary: PathBuf,
+}
 
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString,
@@ -72,6 +86,10 @@ pub struct Agent {
     pub id: AgentId,
     pub state: AgentState,
     pub directive: Directive,
+    /// Stringified UUID of the underlying claude session. Slice 4 introduces
+    /// `AgentEvent::AgentSessionAssigned { session_id: SessionId, .. }` which
+    /// writes to this same field via the reducer (kept as `Option<String>`
+    /// for SQL-storage continuity with the slice-2/3 schema).
     pub session_id: Option<String>,
     pub directory: PathBuf,
     pub objective_id: ObjectiveId,
@@ -80,6 +98,11 @@ pub struct Agent {
     pub origin: SpawnOrigin,
     pub children: Vec<AgentId>,
     pub injected_message: Option<String>,
+    /// Persisted snapshot of the non-volatile `SessionConfig` fields (slice 4).
+    /// `cfg_from(agent)` rebuilds a `SessionConfig` for `ClaudeCodeSession::resume`
+    /// using these values; agents that predate the snapshot event fall back
+    /// to defaults sourced from CLI args (with a warn log).
+    pub last_config_snapshot: Option<AgentConfigSnapshot>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -138,6 +161,22 @@ pub enum AgentEvent {
         tokens_used: u64,
         threshold: u64,
     },
+    /// Slice 4: the orchestrator/registry has bound a `claude` session id to
+    /// this agent. Reducer sets `agent.session_id = Some(session_id.to_string())`.
+    AgentSessionAssigned {
+        agent_id: AgentId,
+        session_id: SessionId,
+        ts: DateTime<Utc>,
+    },
+    /// Slice 4: persisted snapshot of the non-volatile `SessionConfig` fields,
+    /// emitted on agent configure / spawn so `cfg_from(agent)` can rebuild a
+    /// `SessionConfig` after an orchestrator restart without re-asking the
+    /// operator.
+    AgentConfigSnapshotted {
+        agent_id: AgentId,
+        snapshot: AgentConfigSnapshot,
+        ts: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -169,6 +208,7 @@ impl Agent {
             origin,
             children: Vec::new(),
             injected_message,
+            last_config_snapshot: None,
             created_at: now,
             updated_at: now,
         }
@@ -354,6 +394,14 @@ impl Agent {
                 self.session_id = Some(session_id.clone());
                 self.updated_at = Utc::now();
             }
+            AgentEvent::AgentSessionAssigned { session_id, .. } => {
+                self.session_id = Some(session_id.to_string());
+                self.updated_at = Utc::now();
+            }
+            AgentEvent::AgentConfigSnapshotted { snapshot, .. } => {
+                self.last_config_snapshot = Some(snapshot.clone());
+                self.updated_at = Utc::now();
+            }
             AgentEvent::AgentSpawned { .. }
             | AgentEvent::AgentKilled { .. }
             | AgentEvent::HitlRequested { .. }
@@ -398,6 +446,7 @@ impl EventSourced for Agent {
             origin: SpawnOrigin::Operator,
             children: Vec::new(),
             injected_message: None,
+            last_config_snapshot: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

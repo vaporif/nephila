@@ -347,7 +347,9 @@ impl Orchestrator {
                 | AgentEvent::AgentKilled { .. }
                 | AgentEvent::HitlRequested { .. }
                 | AgentEvent::HitlResolved { .. }
-                | AgentEvent::TokenThresholdReached { .. } => {}
+                | AgentEvent::TokenThresholdReached { .. }
+                | AgentEvent::AgentSessionAssigned { .. }
+                | AgentEvent::AgentConfigSnapshotted { .. } => {}
             }
         }
     }

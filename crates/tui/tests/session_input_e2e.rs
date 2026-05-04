@@ -58,6 +58,7 @@ async fn typing_in_pane_emits_human_prompt_events() {
         permission_mode: "bypassPermissions".into(),
         store: Arc::clone(&store),
         blob_reader,
+        crash_fallback_tx: None,
     };
 
     let agent_id = nephila_core::id::AgentId::new();

@@ -30,6 +30,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
 use claude_codes::io::{ClaudeInput, ClaudeOutput, ContentBlock};
@@ -67,6 +68,15 @@ pub struct SessionConfig {
     pub permission_mode: String,
     pub store: Arc<SqliteStore>,
     pub blob_reader: Arc<SqliteBlobReader>,
+    /// Out-of-band crash notification channel.
+    ///
+    /// When the reader observes EOF / parse-error and the resulting `[TurnAborted,
+    /// SessionCrashed]` `append_batch` itself fails (DB error, store closed),
+    /// the reader best-effort-sends the agent id on this channel so the
+    /// `SessionRegistry` can still trigger respawn. Treated as equivalent to
+    /// observing `SessionCrashed` in the event stream; idempotency dedupes
+    /// duplicates.
+    pub crash_fallback_tx: Option<mpsc::Sender<AgentId>>,
 }
 
 impl std::fmt::Debug for SessionConfig {
@@ -78,6 +88,7 @@ impl std::fmt::Debug for SessionConfig {
             .field("working_dir", &self.working_dir)
             .field("mcp_endpoint", &self.mcp_endpoint)
             .field("permission_mode", &self.permission_mode)
+            .field("crash_fallback_tx", &self.crash_fallback_tx.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -107,16 +118,170 @@ pub struct ClaudeCodeSession {
     turns_tx: mpsc::Sender<Turn>,
     store: Arc<SqliteStore>,
     cancel: CancellationToken,
+    /// Set to `true` by `shutdown()` (and `Drop`) BEFORE sending SIGTERM. The
+    /// reader observes this on EOF/parse-error to disambiguate intentional
+    /// teardown from a real crash: when set, the reader emits nothing and
+    /// `shutdown()` itself appends `SessionEnded` after drain.
+    shutting_down: Arc<AtomicBool>,
     child: Mutex<Option<Child>>,
     reader_handle: Mutex<Option<JoinHandle<()>>>,
     writer_handle: Mutex<Option<JoinHandle<()>>>,
     stderr_handle: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// How the claude process is being launched — fresh or resumed.
+#[derive(Debug, Clone, Copy)]
+enum LaunchMode {
+    /// `--session-id <id>` (no on-disk session yet).
+    Fresh,
+    /// `--resume <id>` — caller already verified the on-disk session exists.
+    Resume,
+    /// `--session-id <id>` after a `--resume` failure observed at the stderr level.
+    /// Tracks the metadata flag for the `SessionStarted { resumed: true }` event.
+    ResumeFallback,
+}
+
+#[derive(Debug)]
+enum ResumeOutcome {
+    /// `--resume` is running fine (still alive after the 2s probe, or exited
+    /// successfully within the window). Caller proceeds with `LaunchMode::Resume`.
+    Ok,
+    /// `--resume` exited non-zero with a not-found-style stderr. Caller falls
+    /// back to `LaunchMode::ResumeFallback` (`--session-id`).
+    FallbackToSessionId,
+    /// `--resume` failed in a way that is NOT a missing-session signal — surface
+    /// the error to the caller; do not silently fallback.
+    HardError(String),
+}
+
+impl LaunchMode {
+    const fn resumed(self) -> bool {
+        matches!(self, Self::Resume | Self::ResumeFallback)
+    }
+}
+
 impl ClaudeCodeSession {
-    /// Spawn a new claude subprocess and start the reader/writer tasks.
+    /// Spawn a fresh claude subprocess (`--session-id <id>`) and start the
+    /// reader/writer tasks. Persists `SessionStarted { resumed: false }`.
     #[tracing::instrument(level = "debug", skip(cfg), fields(session_id = %cfg.session_id, agent_id = %cfg.agent_id))]
     pub async fn start(cfg: SessionConfig) -> Result<Self, ConnectorError> {
+        Self::launch(cfg, LaunchMode::Fresh).await
+    }
+
+    /// Resume an existing claude session. Tries `claude --resume <id>` first;
+    /// if that exits within 2s with a "session not found"-style stderr, falls
+    /// back to `claude --session-id <id>` and persists `SessionStarted { resumed: true }`
+    /// with a `fallback=true` metadata flag.
+    ///
+    /// The fallback gate combines (`exit_code` != 0) AND (stderr matches
+    /// `RESUME_NOT_FOUND_PATTERNS`) — neither alone — to reduce false positives.
+    /// On fallback the `session.fallback_to_session_id` metric is recorded.
+    #[tracing::instrument(level = "debug", skip(cfg), fields(session_id = %session_id, agent_id = %cfg.agent_id))]
+    pub async fn resume(mut cfg: SessionConfig, session_id: Uuid) -> Result<Self, ConnectorError> {
+        cfg.session_id = session_id;
+        match Self::try_launch_resume(&cfg).await {
+            ResumeOutcome::Ok => Self::launch(cfg, LaunchMode::Resume).await,
+            ResumeOutcome::FallbackToSessionId => {
+                nephila_store::metrics::record_session_fallback_to_session_id(
+                    &session_id.to_string(),
+                );
+                Self::launch(cfg, LaunchMode::ResumeFallback).await
+            }
+            ResumeOutcome::HardError(stderr) => Err(ConnectorError::Process {
+                exit_code: None,
+                stderr,
+            }),
+        }
+    }
+
+    /// Probe `claude --resume <id>` non-destructively: spawn, wait up to 2s
+    /// for exit, classify the outcome.
+    ///
+    /// `Ok` means the child is alive after 2s — we kill it and signal "go ahead
+    /// and run the real `--resume` launch". `FallbackToSessionId` means the
+    /// child exited non-zero AND its stderr matches the not-found pattern.
+    /// `HardError` means a non-zero exit with an unrecognized stderr — the
+    /// caller propagates as a `ConnectorError::Process`.
+    async fn try_launch_resume(cfg: &SessionConfig) -> ResumeOutcome {
+        use std::time::Duration;
+
+        let mcp_config = build_mcp_config(&cfg.mcp_endpoint);
+        let mcp_config_path = cfg.working_dir.join(".mcp.json");
+        if let Err(e) = tokio::fs::write(&mcp_config_path, &mcp_config).await {
+            return ResumeOutcome::HardError(format!("write .mcp.json: {e}"));
+        }
+
+        let mut child = match Command::new(&cfg.claude_binary)
+            .arg("--print")
+            .arg("--verbose")
+            .arg("--input-format")
+            .arg("stream-json")
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--include-partial-messages")
+            .arg("--resume")
+            .arg(cfg.session_id.to_string())
+            .arg("--mcp-config")
+            .arg(&mcp_config_path)
+            .arg("--permission-mode")
+            .arg(&cfg.permission_mode)
+            .current_dir(&cfg.working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => return ResumeOutcome::HardError(format!("spawn --resume: {e}")),
+        };
+
+        let Some(stderr_pipe) = child.stderr.take() else {
+            return ResumeOutcome::HardError("--resume probe: no stderr pipe".into());
+        };
+
+        let stderr_handle = tokio::spawn(async move {
+            use tokio::io::AsyncReadExt;
+            let mut buf = Vec::new();
+            let _ = tokio::io::BufReader::new(stderr_pipe)
+                .read_to_end(&mut buf)
+                .await;
+            String::from_utf8_lossy(&buf).into_owned()
+        });
+
+        let exit = match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
+            Ok(Ok(status)) => status,
+            Ok(Err(e)) => {
+                stderr_handle.abort();
+                return ResumeOutcome::HardError(format!("--resume wait: {e}"));
+            }
+            Err(_) => {
+                // Still alive after 2s — assume `--resume` is running cleanly.
+                // Kill the probe so the caller can re-spawn cleanly.
+                let _ = child.kill().await;
+                stderr_handle.abort();
+                return ResumeOutcome::Ok;
+            }
+        };
+
+        if exit.success() {
+            // Exited cleanly within 2s — unusual for a long-lived session, but
+            // treat as success. The caller will re-spawn with `--resume`.
+            return ResumeOutcome::Ok;
+        }
+
+        let stderr_text = stderr_handle.await.unwrap_or_default();
+        if crate::resume::is_resume_not_found(&stderr_text) {
+            ResumeOutcome::FallbackToSessionId
+        } else {
+            ResumeOutcome::HardError(format!(
+                "--resume failed (exit={:?}): {stderr_text}",
+                exit.code()
+            ))
+        }
+    }
+
+    async fn launch(cfg: SessionConfig, mode: LaunchMode) -> Result<Self, ConnectorError> {
         let SessionConfig {
             claude_binary,
             session_id,
@@ -126,6 +291,7 @@ impl ClaudeCodeSession {
             permission_mode,
             store,
             blob_reader: _,
+            crash_fallback_tx,
         } = cfg;
 
         let mcp_config = build_mcp_config(&mcp_endpoint);
@@ -137,16 +303,24 @@ impl ClaudeCodeSession {
                 stderr: format!("failed to write .mcp.json: {e}"),
             })?;
 
-        let mut child = Command::new(&claude_binary)
+        let mut command = Command::new(&claude_binary);
+        command
             .arg("--print")
             .arg("--verbose")
             .arg("--input-format")
             .arg("stream-json")
             .arg("--output-format")
             .arg("stream-json")
-            .arg("--include-partial-messages")
-            .arg("--session-id")
-            .arg(session_id.to_string())
+            .arg("--include-partial-messages");
+        match mode {
+            LaunchMode::Fresh | LaunchMode::ResumeFallback => {
+                command.arg("--session-id").arg(session_id.to_string());
+            }
+            LaunchMode::Resume => {
+                command.arg("--resume").arg(session_id.to_string());
+            }
+        }
+        let mut child = command
             .arg("--mcp-config")
             .arg(&mcp_config_path)
             .arg("--permission-mode")
@@ -183,6 +357,7 @@ impl ClaudeCodeSession {
         )));
         let open_turn: OpenTurn = Arc::new(std::sync::Mutex::new(None));
         let tool_names: ToolNames = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let shutting_down = Arc::new(AtomicBool::new(false));
 
         // SessionStarted lands as the very first envelope so consumers can
         // anchor `Session::default_state()`. Failure here is fatal: without
@@ -193,9 +368,21 @@ impl ClaudeCodeSession {
             model: None,
             working_dir: working_dir.clone(),
             mcp_endpoint: mcp_endpoint.clone(),
-            resumed: false,
+            resumed: mode.resumed(),
             ts: Utc::now(),
         };
+        if matches!(mode, LaunchMode::ResumeFallback) {
+            // The `SessionStarted` variant has no metadata field per the slice-1b
+            // shape. We surface the fallback via a tracing span field so dashboards
+            // and audit logs can distinguish it; the `session.fallback_to_session_id`
+            // counter recorded in `Self::resume` is the operator-visible signal.
+            tracing::info!(
+                session_id = %session_id,
+                agent_id = %agent_id,
+                fallback = true,
+                "session resumed via --session-id fallback after --resume failed",
+            );
+        }
         append_one(&store, session_id, &started)
             .await
             .map_err(|e| ConnectorError::Process {
@@ -213,6 +400,9 @@ impl ClaudeCodeSession {
             Arc::clone(&stderr_ring),
             cancel.clone(),
             session_id,
+            agent_id,
+            Arc::clone(&shutting_down),
+            crash_fallback_tx,
         ));
 
         let writer_handle = tokio::spawn(writer_task(
@@ -230,6 +420,7 @@ impl ClaudeCodeSession {
             turns_tx,
             store,
             cancel,
+            shutting_down,
             child: Mutex::new(Some(child)),
             reader_handle: Mutex::new(Some(reader_handle)),
             writer_handle: Mutex::new(Some(writer_handle)),
@@ -276,6 +467,11 @@ impl ClaudeCodeSession {
     /// store-side Trigger B will eventually catch up on the next subscribe.
     #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
     pub async fn shutdown(self) -> Result<(), ConnectorError> {
+        // Order matters: `shutting_down` MUST be set before we cancel and
+        // before SIGTERM lands. Release ordering ensures the reader's
+        // Acquire load observes this write before its EOF/parse-error
+        // branch decides whether to emit `SessionCrashed`.
+        self.shutting_down.store(true, Ordering::Release);
         self.cancel.cancel();
 
         let reader = self.reader_handle.lock().await.take();
@@ -403,6 +599,9 @@ fn send_signal(pid: u32, signal: nix::sys::signal::Signal) -> nix::Result<()> {
 impl Drop for ClaudeCodeSession {
     fn drop(&mut self) {
         // Panic-cleanup path. Operators should prefer `shutdown().await`.
+        // Set shutting_down before SIGTERM so the reader's EOF branch sees
+        // it as intentional teardown, not a crash.
+        self.shutting_down.store(true, Ordering::Release);
         self.cancel.cancel();
         let child_opt = self.child.try_lock().ok().and_then(|mut g| g.take());
         // `mut` is unused on tokio 1.51 (`Child::id(&self) -> Option<u32>`),
@@ -470,6 +669,9 @@ async fn reader_task(
     stderr_ring: StderrRing,
     cancel: CancellationToken,
     session_id: Uuid,
+    agent_id: AgentId,
+    shutting_down: Arc<AtomicBool>,
+    crash_fallback_tx: Option<mpsc::Sender<AgentId>>,
 ) {
     let mut reader = BufReader::new(stdout).lines();
     let mut coalescer = Coalescer::default();
@@ -482,17 +684,31 @@ async fn reader_task(
             res = reader.next_line() => match res {
                 Ok(Some(l)) => l,
                 Ok(None) => {
-                    handle_eof(&store, session_id, &open_turn, &stderr_ring).await;
+                    handle_terminal(
+                        &store,
+                        session_id,
+                        agent_id,
+                        &open_turn,
+                        &stderr_ring,
+                        &shutting_down,
+                        crash_fallback_tx.as_ref(),
+                        TerminalCause::Eof,
+                    )
+                    .await;
                     break;
                 }
                 Err(e) => {
-                    let tail = snapshot_stderr_tail(&stderr_ring);
-                    let crashed = SessionEvent::SessionCrashed {
-                        reason: format!("stdout read error: {e}\n--- stderr tail ---\n{tail}"),
-                        exit_code: None,
-                        ts: Utc::now(),
-                    };
-                    let _ = append_one(&store, session_id, &crashed).await;
+                    handle_terminal(
+                        &store,
+                        session_id,
+                        agent_id,
+                        &open_turn,
+                        &stderr_ring,
+                        &shutting_down,
+                        crash_fallback_tx.as_ref(),
+                        TerminalCause::ReadError(format!("{e}")),
+                    )
+                    .await;
                     break;
                 }
             },
@@ -505,13 +721,17 @@ async fn reader_task(
         let frame = match ClaudeOutput::parse_json(&line) {
             Ok(f) => f,
             Err(e) => {
-                let tail = snapshot_stderr_tail(&stderr_ring);
-                let crashed = SessionEvent::SessionCrashed {
-                    reason: format!("unparseable frame: {e}\n--- stderr tail ---\n{tail}"),
-                    exit_code: None,
-                    ts: Utc::now(),
-                };
-                let _ = append_one(&store, session_id, &crashed).await;
+                handle_terminal(
+                    &store,
+                    session_id,
+                    agent_id,
+                    &open_turn,
+                    &stderr_ring,
+                    &shutting_down,
+                    crash_fallback_tx.as_ref(),
+                    TerminalCause::ParseError(format!("{e}")),
+                )
+                .await;
                 break;
             }
         };
@@ -527,6 +747,13 @@ async fn reader_task(
         )
         .await;
     }
+}
+
+#[derive(Debug)]
+enum TerminalCause {
+    Eof,
+    ReadError(String),
+    ParseError(String),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -775,12 +1002,33 @@ fn extract_hitl_snapshot(content: &serde_json::Value) -> Option<InterruptSnapsho
     Some(InterruptSnapshot::Hitl { question, options })
 }
 
-async fn handle_eof(
+/// Reader-side terminal handler.
+///
+/// On `shutting_down == true`, emits nothing — `shutdown()` itself appends
+/// `SessionEnded` after reader drain. On `false`, emits `[TurnAborted (if open),
+/// SessionCrashed]` in a SINGLE `append_batch` call so consumers observing
+/// `SessionCrashed` always see a preceding `TurnAborted` when a turn was open.
+///
+/// If the `append_batch` itself fails (DB error etc.), the registry's crash
+/// subscription will never see `SessionCrashed` — so we surface the failure
+/// via the optional `crash_fallback_tx` mpsc channel as an out-of-band signal.
+#[allow(clippy::too_many_arguments)]
+async fn handle_terminal(
     store: &Arc<SqliteStore>,
     session_id: Uuid,
+    agent_id: AgentId,
     open_turn: &OpenTurn,
     stderr_ring: &StderrRing,
+    shutting_down: &AtomicBool,
+    crash_fallback_tx: Option<&mpsc::Sender<AgentId>>,
+    cause: TerminalCause,
 ) {
+    if shutting_down.load(Ordering::Acquire) {
+        // Intentional teardown: reader emits nothing, shutdown() writes
+        // SessionEnded after drain.
+        return;
+    }
+
     let mut events = Vec::new();
     if let Some(turn_id) = open_turn.lock().ok().and_then(|mut g| g.take()) {
         events.push(SessionEvent::TurnAborted {
@@ -790,13 +1038,32 @@ async fn handle_eof(
         });
     }
     let tail = snapshot_stderr_tail(stderr_ring);
+    let reason = match cause {
+        TerminalCause::Eof => format!("EOF\n--- stderr tail ---\n{tail}"),
+        TerminalCause::ReadError(e) => {
+            format!("stdout read error: {e}\n--- stderr tail ---\n{tail}")
+        }
+        TerminalCause::ParseError(e) => {
+            format!("unparseable frame: {e}\n--- stderr tail ---\n{tail}")
+        }
+    };
     events.push(SessionEvent::SessionCrashed {
-        reason: format!("EOF\n--- stderr tail ---\n{tail}"),
+        reason,
         exit_code: None,
         ts: Utc::now(),
     });
+
     if let Err(e) = append_batch(store, session_id, events, Vec::new()).await {
-        tracing::error!(error = %e, "failed to persist EOF crash batch");
+        tracing::error!(
+            %agent_id,
+            %session_id,
+            error = ?e,
+            "failed to append crash events; registry will not see SessionCrashed via store",
+        );
+        nephila_store::metrics::record_crash_append_failed(&session_id.to_string());
+        if let Some(tx) = crash_fallback_tx {
+            let _ = tx.try_send(agent_id);
+        }
     }
 }
 

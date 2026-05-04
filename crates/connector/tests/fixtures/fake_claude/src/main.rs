@@ -25,6 +25,11 @@ enum Scenario {
     /// On each stdin line, emit one text frame, sleep 100ms, repeat — used by
     /// pause/resume tests in slice 3 to verify SIGSTOP halts emissions.
     SteadyDrip,
+    /// Slice 4: simulate `claude --resume <id>` against a non-existent session.
+    /// When `--resume` is present, immediately writes a "session not found"
+    /// stderr line and exits 1. When `--resume` is absent (i.e. fallback to
+    /// `--session-id`), behaves like `Happy`.
+    ResumeNotFound,
 }
 
 fn parse_args() -> Args {
@@ -43,6 +48,7 @@ fn parse_args() -> Args {
                     Some("slow_writer") => Scenario::SlowWriter,
                     Some("slow_reader") => Scenario::SlowReader,
                     Some("steady_drip") => Scenario::SteadyDrip,
+                    Some("resume_not_found") => Scenario::ResumeNotFound,
                     Some(other) => {
                         eprintln!("unknown scenario: {other}");
                         std::process::exit(2);
@@ -63,6 +69,16 @@ fn parse_args() -> Args {
 
 fn main() -> std::io::Result<()> {
     let args = parse_args();
+    // `ResumeNotFound`: when invoked with `--resume`, simulate real claude
+    // failing because the session doesn't exist on disk. Slice 4's resume
+    // fallback path keys off this.
+    if matches!(args.scenario, Scenario::ResumeNotFound) && args.resume.is_some() {
+        eprintln!(
+            "error: Session not found: {}",
+            args.resume.as_deref().unwrap_or("?")
+        );
+        std::process::exit(1);
+    }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     // `--resume` wins over `--session-id`, matching real claude's behaviour.
@@ -81,7 +97,10 @@ fn main() -> std::io::Result<()> {
     for line in std::io::BufReader::new(std::io::stdin()).lines() {
         let _ = line?;
         match args.scenario {
-            Scenario::Happy => emit_happy(&mut out, id)?,
+            // Fresh-launch path: ResumeNotFound's `--resume` failure already
+            // exited the process above; here we land via the `--session-id`
+            // fallback or a Happy-only invocation.
+            Scenario::Happy | Scenario::ResumeNotFound => emit_happy(&mut out, id)?,
             Scenario::CrashMidTurn => {
                 emit_partial(&mut out, id)?;
                 std::process::exit(137);

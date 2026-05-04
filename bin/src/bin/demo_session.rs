@@ -40,6 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         permission_mode: "bypassPermissions".into(),
         store: Arc::clone(&store),
         blob_reader,
+        crash_fallback_tx: None,
     };
 
     let session = ClaudeCodeSession::start(cfg).await?;

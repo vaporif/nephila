@@ -2048,7 +2048,7 @@ Run: `cargo test -p nephila-lifecycle --test checkpoint_pairing`. Expected PASS.
 - Modify: `crates/core/src/agent.rs` — add `session_id: Option<SessionId>` and `last_config_snapshot: Option<AgentConfigSnapshot>` fields to `Agent`; extend the reducer to apply `AgentSessionAssigned` (sets `session_id`) and `AgentConfigSnapshot` (sets `last_config_snapshot`)
 - Create: `bin/tests/respawn_e2e.rs` — kill fake_claude mid-turn, assert respawn
 
-- [ ] **Step 1: Implement reader-task crash sequencing.**
+- [x] **Step 1: Implement reader-task crash sequencing.**
 
 In `ClaudeCodeSession::reader_task`, the EOF/parse-error branches must produce events in the right order — `TurnAborted` *before* `SessionCrashed`, in a single `append_batch` call so they're ordered atomically.
 
@@ -2093,7 +2093,7 @@ Test: drive fake_claude with `--scenario crash_mid_turn`, assert event log conta
 - If `true`: emit nothing — `shutdown()` itself appends `SessionEnded` after reader drain.
 This eliminates the SessionCrashed-then-SessionEnded race on clean shutdown. The slice-1a `Drop` pseudocode reference must also set `shutting_down` to `true` before SIGTERM (back-port note for the slice-1a code path; flag for Task 7's cleanup verification).
 
-- [ ] **Step 2: Implement `ClaudeCodeSession::resume`.**
+- [x] **Step 2: Implement `ClaudeCodeSession::resume`.**
 
 ```rust
 pub async fn resume(cfg: SessionConfig, session_id: SessionId) -> Result<Self, ConnectorError> {
@@ -2114,7 +2114,7 @@ pub async fn resume(cfg: SessionConfig, session_id: SessionId) -> Result<Self, C
 
 Test: spawn a fresh session-id with no on-disk session, confirm fallback path triggers; spawn after a real session existed, confirm `--resume` succeeds without fallback.
 
-- [ ] **Step 3: Implement `SessionRegistry`.**
+- [x] **Step 3: Implement `SessionRegistry`.**
 
 `bin/src/session_registry.rs`:
 
@@ -2172,7 +2172,7 @@ while let Some(env) = stream.next().await {
 
 Test: drive a crash via fake_claude `--scenario crash_mid_turn`; assert respawn happens within 2s and the new session's pump rejoins consumers.
 
-- [ ] **Step 4: Cross-process lockfile.**
+- [x] **Step 4: Cross-process lockfile.**
 
 In `bin/src/orchestrator.rs::main`, before spawning anything:
 
@@ -2183,7 +2183,7 @@ let _lock = nephila_store::lockfile::WorkdirLock::acquire(&workdir)
 
 Test: spawn the orchestrator twice from a script against the same workdir; second exits non-zero with the lock error in stderr.
 
-- [ ] **Step 5: Restart-on-nephila-restart path.**
+- [x] **Step 5: Restart-on-nephila-restart path.**
 
 `SessionRegistry::on_startup`:
 
@@ -2232,7 +2232,7 @@ pub enum AgentEvent {
 
 Test (`crates/core/tests/agent_session_assignment.rs`): fresh agent has `session_id == None`; after applying `AgentSessionAssigned`, the field is `Some(...)`; `cfg_from` falls back gracefully when `last_config_snapshot == None`.
 
-- [ ] **Step 6: Crash-during-respawn test.**
+- [x] **Step 6: Crash-during-respawn test.**
 
 Inject the abort via a `#[cfg(test)] abort_after_drop_old: Option<oneshot::Sender<()>>` field on `SessionRegistry`. The `on_crash` code path runs:
 
@@ -2258,7 +2258,7 @@ Why not `#[cfg(test)]` `panic!`: a panic inside `tokio::spawn` is silently absor
 3. Builds a fresh runtime + `SessionRegistry`, calls `on_startup`, asserts the active agent is resumed cleanly.
 4. Asserts no orphan claude processes via `pgrep -af claude` returns empty (gated to Unix and skipped on CI without `pgrep`).
 
-- [ ] **Step 7: Verify and commit.**
+- [x] **Step 7: Verify and commit.**
 
 `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`. Commit: `slice-4: crash + resume — TurnAborted+SessionCrashed sequencing, SessionRegistry, lockfile, --resume fallback`.
 
