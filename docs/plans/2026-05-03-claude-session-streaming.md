@@ -1518,7 +1518,7 @@ tx.commit()?;
 
 Test in `crates/connector/tests/oversized_tool_result.rs` — drive fake-claude with `--scenario oversized_tool_result`, assert the appended event is `ToolResultPayload::Spilled { .. }` with the right `original_len`, then call `blob_reader.get(hash)` and assert the bytes match. Also test atomicity: inject a writer-closure error (test-only seam) after the blobs INSERT but before the event INSERT, assert the blob is NOT visible to a follow-up `blob_reader.get(hash)` (transaction rolled back).
 
-- [ ] **Step 12: Replace draft-broadcast with store.append_batch in `ClaudeCodeSession`.**
+- [x] **Step 12: Replace draft-broadcast with store.append_batch in `ClaudeCodeSession`.**
 
 Replace `drafts_tx: broadcast::Sender<SessionEventDraft>` with `store: Arc<dyn DomainEventStore>` and `aggregate_id: SessionId` (= `session_id`). `subscribe_drafts()` is removed; consumers call `store.subscribe_after("session", session_id.to_string(), since_seq)` directly. The connector internally batches events emitted from a single `ClaudeOutput` frame into one `append_batch` call.
 

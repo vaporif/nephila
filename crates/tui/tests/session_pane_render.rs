@@ -1,5 +1,5 @@
 use chrono::{TimeZone, Utc};
-use nephila_connector::event_draft::SessionEventDraft;
+use nephila_core::session_event::SessionEvent;
 use nephila_tui::panels::session_pane::SessionPane;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -13,19 +13,20 @@ fn renders_human_assistant_and_completion_rows() {
     let mut pane = SessionPane::new();
     let ts = Utc.with_ymd_and_hms(2026, 5, 4, 12, 34, 56).unwrap();
     let turn_id = Uuid::new_v4();
-    pane.push_draft(SessionEventDraft::HumanPromptQueued {
+    pane.push_event(SessionEvent::HumanPromptQueued {
         turn_id,
         text: "echo OK".into(),
         ts,
     });
-    pane.push_draft(SessionEventDraft::AssistantMessage {
+    pane.push_event(SessionEvent::AssistantMessage {
         message_id: "msg-1".into(),
         seq_in_message: 0,
         delta_text: "OK".into(),
         is_final: true,
+        truncated: false,
         ts,
     });
-    pane.push_draft(SessionEventDraft::TurnCompleted {
+    pane.push_event(SessionEvent::TurnCompleted {
         turn_id,
         stop_reason: "end_turn".into(),
         ts,

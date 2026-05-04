@@ -1,48 +1,63 @@
 //! `ClaudeCodeSession` — owns one long-lived `claude` process per agent.
 //!
-//! Slice 1a: in-process producer that emits `SessionEventDraft`s to a
-//! `tokio::sync::broadcast` channel. Slice 1b promotes drafts to durable
-//! `SessionEvent`s and replaces the broadcast with `DomainEventStore` calls.
+//! Slice 1b: the connector is the sole producer of `SessionEvent`s for the
+//! aggregate. Events are persisted via `SqliteStore::append_batch` (or
+//! `append_batch_with_blobs` for oversized tool-result payloads) directly
+//! from the reader/writer tasks; the store stamps sequence per ADR-0002.
 //!
 //! Architecture:
 //!   - one `tokio::process::Child` running the `claude` binary in stream-json mode
 //!   - reader task: consumes stdout JSON lines, runs them through `Coalescer`,
-//!     and translates `ClaudeOutput` frames into `SessionEventDraft`s
-//!   - writer task: serialises `Turn` requests to `claude` stdin and bookkeeps
+//!     translates `ClaudeOutput` frames into `SessionEvent`s, batches the events
+//!     produced by a single frame, and writes them in one `append_batch` call
+//!   - writer task: serialises `Turn` requests to `claude` stdin and persists
 //!     the `*PromptQueued`/`*PromptDelivered` event pair
 //!   - stderr drain task: pulls stderr line-by-line into a bounded ring buffer
 //!     so the OS pipe never fills (would otherwise deadlock claude)
 //!
 //! Channel bounds:
 //!   - `turns_tx`:    mpsc bound 16 (small — `send_turn` backpressures here)
-//!   - `drafts_tx`:   broadcast bound 4096 (per spec `§subscribe_after`)
 //!   - stderr ring: `VecDeque` cap 256 lines (drop oldest)
+//!
+//! `SessionConfig` holds concrete `Arc<SqliteStore>` and `Arc<SqliteBlobReader>`
+//! handles. The plan's `Arc<dyn DomainEventStore>` shape is not currently
+//! workable — `DomainEventStore` and `BlobReader` use RPITIT (`-> impl Future`)
+//! which is not dyn-compatible without a wrapper, and `append_batch_with_blobs`
+//! lives on `SqliteStore` rather than the trait. Concrete types match the
+//! existing pattern in `crates/lifecycle/src/lifecycle_supervisor.rs`.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 
 use chrono::Utc;
 use claude_codes::io::{ClaudeInput, ClaudeOutput, ContentBlock};
-use nephila_core::id::AgentId;
+use nephila_core::id::{AgentId, CheckpointId};
+use nephila_core::session_event::{InterruptSnapshot, SessionEvent, ToolResultPayload};
+use nephila_eventsourcing::aggregate::EventSourced;
+use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::id::{EventId, TraceId};
+use nephila_eventsourcing::snapshot::Snapshot;
+use nephila_eventsourcing::store::DomainEventStore;
+use nephila_store::SqliteStore;
+use nephila_store::blob::{PreparedBlob, SqliteBlobReader, prepare_blob};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::error::ConnectorError;
-use crate::event_draft::SessionEventDraft;
 use crate::stream::Coalescer;
 
 const TURNS_CHANNEL_BOUND: usize = 16;
-const DRAFTS_CHANNEL_BOUND: usize = 4096;
 const STDERR_RING_CAP: usize = 256;
 const STDERR_TAIL_LINES: usize = 32;
+const TOOL_RESULT_INLINE_MAX: usize = 256 * 1024;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SessionConfig {
     pub claude_binary: PathBuf,
     pub session_id: Uuid,
@@ -50,6 +65,21 @@ pub struct SessionConfig {
     pub working_dir: PathBuf,
     pub mcp_endpoint: String,
     pub permission_mode: String,
+    pub store: Arc<SqliteStore>,
+    pub blob_reader: Arc<SqliteBlobReader>,
+}
+
+impl std::fmt::Debug for SessionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionConfig")
+            .field("claude_binary", &self.claude_binary)
+            .field("session_id", &self.session_id)
+            .field("agent_id", &self.agent_id)
+            .field("working_dir", &self.working_dir)
+            .field("mcp_endpoint", &self.mcp_endpoint)
+            .field("permission_mode", &self.permission_mode)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -69,12 +99,13 @@ struct Turn {
 
 type StderrRing = Arc<std::sync::Mutex<VecDeque<String>>>;
 type OpenTurn = Arc<std::sync::Mutex<Option<TurnId>>>;
+type ToolNames = Arc<std::sync::Mutex<HashMap<String, String>>>;
 
 pub struct ClaudeCodeSession {
     session_id: Uuid,
     agent_id: AgentId,
     turns_tx: mpsc::Sender<Turn>,
-    drafts_tx: broadcast::Sender<SessionEventDraft>,
+    store: Arc<SqliteStore>,
     cancel: CancellationToken,
     child: Mutex<Option<Child>>,
     reader_handle: Mutex<Option<JoinHandle<()>>>,
@@ -93,6 +124,8 @@ impl ClaudeCodeSession {
             working_dir,
             mcp_endpoint,
             permission_mode,
+            store,
+            blob_reader: _,
         } = cfg;
 
         let mcp_config = build_mcp_config(&mcp_endpoint);
@@ -143,25 +176,40 @@ impl ClaudeCodeSession {
         })?;
 
         let (turns_tx, turns_rx) = mpsc::channel::<Turn>(TURNS_CHANNEL_BOUND);
-        let (drafts_tx, _) = broadcast::channel::<SessionEventDraft>(DRAFTS_CHANNEL_BOUND);
         let cancel = CancellationToken::new();
 
         let stderr_ring: StderrRing = Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
             STDERR_RING_CAP,
         )));
         let open_turn: OpenTurn = Arc::new(std::sync::Mutex::new(None));
+        let tool_names: ToolNames = Arc::new(std::sync::Mutex::new(HashMap::new()));
 
-        let _ = drafts_tx.send(SessionEventDraft::SessionStarted {
+        // SessionStarted lands as the very first envelope so consumers can
+        // anchor `Session::default_state()`. Failure here is fatal: without
+        // the bootstrap event, replay produces a malformed aggregate.
+        let started = SessionEvent::SessionStarted {
+            session_id,
+            agent_id,
+            model: None,
+            working_dir: working_dir.clone(),
+            mcp_endpoint: mcp_endpoint.clone(),
             resumed: false,
             ts: Utc::now(),
-        });
+        };
+        append_one(&store, session_id, &started)
+            .await
+            .map_err(|e| ConnectorError::Process {
+                exit_code: None,
+                stderr: format!("persist SessionStarted: {e}"),
+            })?;
 
         let stderr_handle = tokio::spawn(stderr_drain_task(stderr, Arc::clone(&stderr_ring)));
 
         let reader_handle = tokio::spawn(reader_task(
             stdout,
-            drafts_tx.clone(),
+            Arc::clone(&store),
             Arc::clone(&open_turn),
+            Arc::clone(&tool_names),
             Arc::clone(&stderr_ring),
             cancel.clone(),
             session_id,
@@ -170,7 +218,7 @@ impl ClaudeCodeSession {
         let writer_handle = tokio::spawn(writer_task(
             stdin,
             turns_rx,
-            drafts_tx.clone(),
+            Arc::clone(&store),
             Arc::clone(&open_turn),
             cancel.clone(),
             session_id,
@@ -180,7 +228,7 @@ impl ClaudeCodeSession {
             session_id,
             agent_id,
             turns_tx,
-            drafts_tx,
+            store,
             cancel,
             child: Mutex::new(Some(child)),
             reader_handle: Mutex::new(Some(reader_handle)),
@@ -189,9 +237,10 @@ impl ClaudeCodeSession {
         })
     }
 
+    /// Aggregate id consumers pass to `store.subscribe_after("session", ..)`.
     #[must_use]
-    pub fn subscribe_drafts(&self) -> broadcast::Receiver<SessionEventDraft> {
-        self.drafts_tx.subscribe()
+    pub fn aggregate_id(&self) -> String {
+        self.session_id.to_string()
     }
 
     /// Enqueue a turn for delivery to claude.
@@ -220,6 +269,11 @@ impl ClaudeCodeSession {
     }
 
     /// Graceful teardown: cancel tasks, close stdin, await drain, reap child.
+    ///
+    /// On clean shutdown, materializes the final `Session` state by replaying
+    /// from `store.load_events` and writes a snapshot at `last_seq` (Trigger A
+    /// per plan step 17). Snapshot save failures do NOT fail shutdown — the
+    /// store-side Trigger B will eventually catch up on the next subscribe.
     #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
     pub async fn shutdown(self) -> Result<(), ConnectorError> {
         self.cancel.cancel();
@@ -238,10 +292,17 @@ impl ClaudeCodeSession {
             let _ = h.await;
         }
 
-        // Broadcast may have no subscribers; ignore the send result.
-        let _ = self
-            .drafts_tx
-            .send(SessionEventDraft::SessionEnded { ts: Utc::now() });
+        // Persist SessionEnded; failures here are logged but non-fatal.
+        // Subsequent snapshot save sees the SessionEnded event in its replay.
+        let ended = SessionEvent::SessionEnded { ts: Utc::now() };
+        if let Err(e) = append_one(&self.store, self.session_id, &ended).await {
+            tracing::warn!(error = %e, "failed to persist SessionEnded");
+        }
+
+        // Trigger A: materialize final aggregate state and snapshot it.
+        if let Err(e) = save_terminal_snapshot(&self.store, self.session_id).await {
+            tracing::warn!(error = %e, "Trigger A snapshot save failed (non-fatal)");
+        }
 
         // `kill_on_drop = false`, so reap explicitly: SIGTERM, then wait.
         let maybe_child = self.child.lock().await.take();
@@ -336,8 +397,9 @@ fn snapshot_stderr_tail(ring: &StderrRing) -> String {
 #[allow(clippy::too_many_arguments)]
 async fn reader_task(
     stdout: tokio::process::ChildStdout,
-    drafts_tx: broadcast::Sender<SessionEventDraft>,
+    store: Arc<SqliteStore>,
     open_turn: OpenTurn,
+    tool_names: ToolNames,
     stderr_ring: StderrRing,
     cancel: CancellationToken,
     session_id: Uuid,
@@ -353,16 +415,17 @@ async fn reader_task(
             res = reader.next_line() => match res {
                 Ok(Some(l)) => l,
                 Ok(None) => {
-                    handle_eof(&drafts_tx, &open_turn, &stderr_ring);
+                    handle_eof(&store, session_id, &open_turn, &stderr_ring).await;
                     break;
                 }
                 Err(e) => {
                     let tail = snapshot_stderr_tail(&stderr_ring);
-                    let _ = drafts_tx.send(SessionEventDraft::SessionCrashed {
+                    let crashed = SessionEvent::SessionCrashed {
                         reason: format!("stdout read error: {e}\n--- stderr tail ---\n{tail}"),
                         exit_code: None,
                         ts: Utc::now(),
-                    });
+                    };
+                    let _ = append_one(&store, session_id, &crashed).await;
                     break;
                 }
             },
@@ -376,34 +439,44 @@ async fn reader_task(
             Ok(f) => f,
             Err(e) => {
                 let tail = snapshot_stderr_tail(&stderr_ring);
-                let _ = drafts_tx.send(SessionEventDraft::SessionCrashed {
+                let crashed = SessionEvent::SessionCrashed {
                     reason: format!("unparseable frame: {e}\n--- stderr tail ---\n{tail}"),
                     exit_code: None,
                     ts: Utc::now(),
-                });
+                };
+                let _ = append_one(&store, session_id, &crashed).await;
                 break;
             }
         };
 
         process_frame(
             frame,
-            &drafts_tx,
+            &store,
             &open_turn,
+            &tool_names,
             &mut coalescer,
             &mut active_message_ids,
             session_id,
-        );
+        )
+        .await;
     }
 }
 
-fn process_frame(
+#[allow(clippy::too_many_arguments)]
+async fn process_frame(
     frame: ClaudeOutput,
-    drafts_tx: &broadcast::Sender<SessionEventDraft>,
+    store: &Arc<SqliteStore>,
     open_turn: &OpenTurn,
+    tool_names: &ToolNames,
     coalescer: &mut Coalescer,
     active_message_ids: &mut Vec<String>,
-    _session_id: Uuid,
+    session_id: Uuid,
 ) {
+    let mut events: Vec<SessionEvent> = Vec::new();
+    // Tool-result spillover: at most one per frame in practice (claude emits
+    // each tool-result block in its own frame), but the API allows several.
+    let mut blobs: Vec<PreparedBlob> = Vec::new();
+
     match frame {
         ClaudeOutput::System(_)
         | ClaudeOutput::User(_)
@@ -411,7 +484,7 @@ fn process_frame(
         | ClaudeOutput::ControlResponse(_)
         | ClaudeOutput::Error(_)
         | ClaudeOutput::RateLimitEvent(_) => {
-            // Slice 1b records these; slice 1a discards.
+            // Slice 1b records these in observability metrics only.
         }
         ClaudeOutput::Assistant(asst) => {
             let message_id = asst.message.id.clone();
@@ -422,11 +495,12 @@ fn process_frame(
                 match block {
                     ContentBlock::Text(t) => {
                         if let Some(ev) = coalescer.push_delta(&message_id, &t.text) {
-                            let _ = drafts_tx.send(ev);
+                            events.push(ev);
                         }
                     }
                     ContentBlock::ToolUse(t) => {
-                        let _ = drafts_tx.send(SessionEventDraft::ToolCall {
+                        record_tool_use(tool_names, &t.id, &t.name);
+                        events.push(SessionEvent::ToolCall {
                             tool_use_id: t.id,
                             tool_name: t.name,
                             input: t.input,
@@ -434,7 +508,8 @@ fn process_frame(
                         });
                     }
                     ContentBlock::McpToolUse(t) => {
-                        let _ = drafts_tx.send(SessionEventDraft::ToolCall {
+                        record_tool_use(tool_names, &t.id, &t.name);
+                        events.push(SessionEvent::ToolCall {
                             tool_use_id: t.id,
                             tool_name: t.name,
                             input: t.input,
@@ -442,23 +517,53 @@ fn process_frame(
                         });
                     }
                     ContentBlock::ToolResult(r) => {
-                        let _ = drafts_tx.send(SessionEventDraft::ToolResult {
-                            tool_use_id: r.tool_use_id,
-                            output: serde_json::to_value(&r.content)
-                                .unwrap_or(serde_json::Value::Null),
-                            is_error: r.is_error.unwrap_or(false),
-                            ts: Utc::now(),
-                        });
+                        let raw =
+                            serde_json::to_value(&r.content).unwrap_or(serde_json::Value::Null);
+                        let is_error = r.is_error.unwrap_or(false);
+                        let prepared =
+                            build_tool_result_event(&r.tool_use_id, &raw, is_error, &mut events);
+                        if let Some(p) = prepared {
+                            blobs.push(p);
+                        }
                     }
                     ContentBlock::McpToolResult(r) => {
-                        let _ = drafts_tx.send(SessionEventDraft::ToolResult {
-                            tool_use_id: r.tool_use_id,
-                            output: r.content,
-                            is_error: r.is_error.unwrap_or(false),
-                            ts: Utc::now(),
-                        });
+                        let is_error = r.is_error.unwrap_or(false);
+                        let prepared = build_tool_result_event(
+                            &r.tool_use_id,
+                            &r.content,
+                            is_error,
+                            &mut events,
+                        );
+                        if let Some(p) = prepared {
+                            blobs.push(p);
+                        }
+                        // Look up the tool name to decide whether this is a
+                        // checkpoint round-trip. Only a successful result
+                        // counts as `CheckpointReached`; an error is treated
+                        // as a regular tool result.
+                        if !is_error
+                            && let Some(name) = lookup_tool_name(tool_names, &r.tool_use_id)
+                            && matches!(
+                                name.as_str(),
+                                "serialize_and_persist" | "request_human_input"
+                            )
+                        {
+                            match derive_checkpoint(&r.content, name.as_str()) {
+                                Ok(Some(ev)) => events.push(ev),
+                                Ok(None) => {}
+                                Err(reason) => {
+                                    events.clear();
+                                    blobs.clear();
+                                    events.push(SessionEvent::SessionCrashed {
+                                        reason: format!("malformed checkpoint_id: {reason}"),
+                                        exit_code: None,
+                                        ts: Utc::now(),
+                                    });
+                                }
+                            }
+                        }
                     }
-                    // thinking/image/server-tool blocks: not surfaced in slice 1a.
+                    // thinking/image/server-tool blocks: not surfaced in slice 1b.
                     _ => {}
                 }
             }
@@ -467,7 +572,7 @@ fn process_frame(
             // (second/last frame).
             if asst.message.stop_reason.is_some() {
                 if let Some(ev) = coalescer.finalize(&message_id) {
-                    let _ = drafts_tx.send(ev);
+                    events.push(ev);
                 }
                 active_message_ids.retain(|id| id != &message_id);
             }
@@ -477,7 +582,7 @@ fn process_frame(
             // before `TurnCompleted` lands.
             for id in active_message_ids.drain(..) {
                 if let Some(ev) = coalescer.finalize(&id) {
-                    let _ = drafts_tx.send(ev);
+                    events.push(ev);
                 }
             }
 
@@ -485,7 +590,7 @@ fn process_frame(
             let turn_id = open_turn.lock().ok().and_then(|mut g| g.take());
 
             if let Some(turn_id) = turn_id {
-                let _ = drafts_tx.send(SessionEventDraft::TurnCompleted {
+                events.push(SessionEvent::TurnCompleted {
                     turn_id,
                     stop_reason,
                     ts: Utc::now(),
@@ -495,32 +600,143 @@ fn process_frame(
             }
         }
     }
+
+    if events.is_empty() {
+        return;
+    }
+
+    if let Err(e) = append_batch(store, session_id, events, blobs).await {
+        tracing::error!(error = %e, "failed to append SessionEvent batch");
+    }
 }
 
-fn handle_eof(
-    drafts_tx: &broadcast::Sender<SessionEventDraft>,
+fn record_tool_use(tool_names: &ToolNames, tool_use_id: &str, tool_name: &str) {
+    if let Ok(mut g) = tool_names.lock() {
+        g.insert(tool_use_id.to_owned(), tool_name.to_owned());
+    }
+}
+
+fn lookup_tool_name(tool_names: &ToolNames, tool_use_id: &str) -> Option<String> {
+    tool_names
+        .lock()
+        .ok()
+        .and_then(|mut g| g.remove(tool_use_id))
+}
+
+/// Builds a `ToolResult` event (inline or spilled per `TOOL_RESULT_INLINE_MAX`)
+/// and appends it to `events`. Returns the `PreparedBlob` if spillover occurred.
+fn build_tool_result_event(
+    tool_use_id: &str,
+    raw_output: &serde_json::Value,
+    is_error: bool,
+    events: &mut Vec<SessionEvent>,
+) -> Option<PreparedBlob> {
+    let bytes = match serde_json::to_vec(raw_output) {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(error = %e, "tool result re-serialise failed; emitting null inline");
+            events.push(SessionEvent::ToolResult {
+                tool_use_id: tool_use_id.to_owned(),
+                output: ToolResultPayload::Inline(serde_json::Value::Null),
+                is_error,
+                ts: Utc::now(),
+            });
+            return None;
+        }
+    };
+    if bytes.len() <= TOOL_RESULT_INLINE_MAX {
+        events.push(SessionEvent::ToolResult {
+            tool_use_id: tool_use_id.to_owned(),
+            output: ToolResultPayload::Inline(raw_output.clone()),
+            is_error,
+            ts: Utc::now(),
+        });
+        return None;
+    }
+    let prepared = prepare_blob(&bytes);
+    events.push(SessionEvent::ToolResult {
+        tool_use_id: tool_use_id.to_owned(),
+        output: ToolResultPayload::Spilled {
+            hash: prepared.hash.clone(),
+            original_len: prepared.original_len,
+            snippet: prepared.snippet.clone(),
+        },
+        is_error,
+        ts: Utc::now(),
+    });
+    Some(prepared)
+}
+
+/// Extracts `checkpoint_id` from an MCP tool-result content payload and
+/// constructs a `CheckpointReached` event. Returns `Ok(None)` when no
+/// checkpoint id is present (e.g. early stages of `request_human_input`),
+/// `Err(reason)` when present-but-malformed.
+fn derive_checkpoint(
+    content: &serde_json::Value,
+    tool_name: &str,
+) -> Result<Option<SessionEvent>, String> {
+    let id_str = match content.get("checkpoint_id") {
+        Some(serde_json::Value::String(s)) => s,
+        Some(other) => {
+            return Err(format!("checkpoint_id is not a string: {other}"));
+        }
+        None => return Ok(None),
+    };
+    let uuid = Uuid::parse_str(id_str).map_err(|e| format!("{id_str:?}: {e}"))?;
+    let interrupt = match tool_name {
+        "request_human_input" => extract_hitl_snapshot(content),
+        _ => None,
+    };
+    Ok(Some(SessionEvent::CheckpointReached {
+        checkpoint_id: CheckpointId(uuid),
+        interrupt,
+        ts: Utc::now(),
+    }))
+}
+
+fn extract_hitl_snapshot(content: &serde_json::Value) -> Option<InterruptSnapshot> {
+    let question = content.get("question").and_then(|v| v.as_str())?.to_owned();
+    let options = content
+        .get("options")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Some(InterruptSnapshot::Hitl { question, options })
+}
+
+async fn handle_eof(
+    store: &Arc<SqliteStore>,
+    session_id: Uuid,
     open_turn: &OpenTurn,
     stderr_ring: &StderrRing,
 ) {
+    let mut events = Vec::new();
     if let Some(turn_id) = open_turn.lock().ok().and_then(|mut g| g.take()) {
-        let _ = drafts_tx.send(SessionEventDraft::TurnAborted {
+        events.push(SessionEvent::TurnAborted {
             turn_id,
             reason: "session_crashed".into(),
             ts: Utc::now(),
         });
     }
     let tail = snapshot_stderr_tail(stderr_ring);
-    let _ = drafts_tx.send(SessionEventDraft::SessionCrashed {
+    events.push(SessionEvent::SessionCrashed {
         reason: format!("EOF\n--- stderr tail ---\n{tail}"),
         exit_code: None,
         ts: Utc::now(),
     });
+    if let Err(e) = append_batch(store, session_id, events, Vec::new()).await {
+        tracing::error!(error = %e, "failed to persist EOF crash batch");
+    }
 }
 
 async fn writer_task(
     mut stdin: ChildStdin,
     mut turns_rx: mpsc::Receiver<Turn>,
-    drafts_tx: broadcast::Sender<SessionEventDraft>,
+    store: Arc<SqliteStore>,
     open_turn: OpenTurn,
     cancel: CancellationToken,
     session_id: Uuid,
@@ -536,28 +752,31 @@ async fn writer_task(
         };
 
         let queued = match turn.source {
-            PromptSource::Human => SessionEventDraft::HumanPromptQueued {
+            PromptSource::Human => SessionEvent::HumanPromptQueued {
                 turn_id: turn.turn_id,
                 text: turn.text.clone(),
                 ts: Utc::now(),
             },
-            PromptSource::Agent => SessionEventDraft::AgentPromptQueued {
+            PromptSource::Agent => SessionEvent::AgentPromptQueued {
                 turn_id: turn.turn_id,
                 text: turn.text.clone(),
                 ts: Utc::now(),
             },
         };
-        let _ = drafts_tx.send(queued);
+        if let Err(e) = append_one(&store, session_id, &queued).await {
+            tracing::error!(error = %e, "failed to persist *PromptQueued");
+        }
 
         let payload = ClaudeInput::user_message(turn.text, session_id);
         let mut bytes = match serde_json::to_vec(&payload) {
             Ok(b) => b,
             Err(e) => {
-                let _ = drafts_tx.send(SessionEventDraft::PromptDeliveryFailed {
+                let failed = SessionEvent::PromptDeliveryFailed {
                     turn_id: turn.turn_id,
                     reason: format!("serialize ClaudeInput: {e}"),
                     ts: Utc::now(),
-                });
+                };
+                let _ = append_one(&store, session_id, &failed).await;
                 continue;
             }
         };
@@ -566,15 +785,16 @@ async fn writer_task(
         match stdin.write_all(&bytes).await {
             Ok(()) => {
                 if let Err(e) = stdin.flush().await {
-                    let _ = drafts_tx.send(SessionEventDraft::PromptDeliveryFailed {
+                    let failed = SessionEvent::PromptDeliveryFailed {
                         turn_id: turn.turn_id,
                         reason: format!("stdin flush: {e}"),
                         ts: Utc::now(),
-                    });
+                    };
+                    let _ = append_one(&store, session_id, &failed).await;
                     continue;
                 }
-                // ORDERING INVARIANT (slice 1a): emit `*PromptDelivered`
-                // *before* publishing `open_turn`. The reader can only emit
+                // ORDERING INVARIANT: emit `*PromptDelivered` *before*
+                // publishing `open_turn`. The reader can only emit
                 // `TurnCompleted` after a `Result` frame from claude, which
                 // claude can only send for a turn it has already received —
                 // i.e. one for which we successfully wrote to its stdin.
@@ -584,28 +804,132 @@ async fn writer_task(
                 // "every `*PromptQueued{turn_id}` is followed by exactly one
                 // of `{TurnCompleted, TurnAborted, PromptDeliveryFailed}`".
                 let delivered = match turn.source {
-                    PromptSource::Human => SessionEventDraft::HumanPromptDelivered {
+                    PromptSource::Human => SessionEvent::HumanPromptDelivered {
                         turn_id: turn.turn_id,
                         ts: Utc::now(),
                     },
-                    PromptSource::Agent => SessionEventDraft::AgentPromptDelivered {
+                    PromptSource::Agent => SessionEvent::AgentPromptDelivered {
                         turn_id: turn.turn_id,
                         ts: Utc::now(),
                     },
                 };
-                let _ = drafts_tx.send(delivered);
+                if let Err(e) = append_one(&store, session_id, &delivered).await {
+                    tracing::error!(error = %e, "failed to persist *PromptDelivered");
+                }
                 if let Ok(mut g) = open_turn.lock() {
                     *g = Some(turn.turn_id);
                 }
             }
             Err(e) => {
-                let _ = drafts_tx.send(SessionEventDraft::PromptDeliveryFailed {
+                let failed = SessionEvent::PromptDeliveryFailed {
                     turn_id: turn.turn_id,
                     reason: format!("stdin write: {e}"),
                     ts: Utc::now(),
-                });
+                };
+                let _ = append_one(&store, session_id, &failed).await;
                 break;
             }
         }
     }
+}
+
+fn make_envelope(session_id: Uuid, event: &SessionEvent) -> Result<EventEnvelope, ConnectorError> {
+    let payload = serde_json::to_value(event).map_err(|e| ConnectorError::Process {
+        exit_code: None,
+        stderr: format!("serialize SessionEvent: {e}"),
+    })?;
+    Ok(EventEnvelope {
+        id: EventId::new(),
+        aggregate_type: "session".to_owned(),
+        aggregate_id: session_id.to_string(),
+        // Stamped by the writer thread per ADR-0002.
+        sequence: 0,
+        event_type: event.kind().to_owned(),
+        payload,
+        trace_id: TraceId(session_id.to_string()),
+        outcome: None,
+        timestamp: Utc::now(),
+        context_snapshot: None,
+        metadata: HashMap::new(),
+    })
+}
+
+async fn append_one(
+    store: &Arc<SqliteStore>,
+    session_id: Uuid,
+    event: &SessionEvent,
+) -> Result<(), ConnectorError> {
+    let env = make_envelope(session_id, event)?;
+    store
+        .append_batch(vec![env])
+        .await
+        .map_err(|e| ConnectorError::Process {
+            exit_code: None,
+            stderr: format!("append: {e}"),
+        })?;
+    Ok(())
+}
+
+async fn append_batch(
+    store: &Arc<SqliteStore>,
+    session_id: Uuid,
+    events: Vec<SessionEvent>,
+    blobs: Vec<PreparedBlob>,
+) -> Result<(), ConnectorError> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    let envelopes = events
+        .iter()
+        .map(|e| make_envelope(session_id, e))
+        .collect::<Result<Vec<_>, _>>()?;
+    if blobs.is_empty() {
+        store
+            .append_batch(envelopes)
+            .await
+            .map_err(|e| ConnectorError::Process {
+                exit_code: None,
+                stderr: format!("append_batch: {e}"),
+            })?;
+    } else {
+        store
+            .append_batch_with_blobs(envelopes, blobs)
+            .await
+            .map_err(|e| ConnectorError::Process {
+                exit_code: None,
+                stderr: format!("append_batch_with_blobs: {e}"),
+            })?;
+    }
+    Ok(())
+}
+
+async fn save_terminal_snapshot(
+    store: &Arc<SqliteStore>,
+    session_id: Uuid,
+) -> Result<(), nephila_eventsourcing::store::EventStoreError> {
+    use nephila_core::session::Session;
+
+    let agg_id = session_id.to_string();
+    let events = store.load_events("session", &agg_id, 0).await?;
+    if events.is_empty() {
+        return Ok(());
+    }
+    let mut state = Session::default_state();
+    let mut last_seq = 0u64;
+    for env in &events {
+        state = state.apply_envelope(env).map_err(|e| {
+            nephila_eventsourcing::store::EventStoreError::Serialization(e.to_string())
+        })?;
+        last_seq = env.sequence;
+    }
+    let state_value = serde_json::to_value(&state)
+        .map_err(|e| nephila_eventsourcing::store::EventStoreError::Serialization(e.to_string()))?;
+    let snap = Snapshot {
+        aggregate_type: "session".to_owned(),
+        aggregate_id: agg_id,
+        sequence: last_seq,
+        state: state_value,
+        timestamp: Utc::now(),
+    };
+    store.save_snapshot(&snap).await
 }

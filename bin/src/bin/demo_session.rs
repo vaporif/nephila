@@ -1,5 +1,5 @@
-//! Slice-1a demo: spawns one `ClaudeCodeSession` against the fake-claude
-//! binary, sends a single human turn, and prints the draft event stream
+//! Slice-1b demo: spawns one `ClaudeCodeSession` against the fake-claude
+//! binary, sends a single human turn, and prints the persisted event stream
 //! for 5 seconds.
 //!
 //! Usage:
@@ -8,10 +8,16 @@
 //! Manual verification only — slice 5 deletes this file.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
+use futures::StreamExt;
 use nephila_connector::session::{ClaudeCodeSession, PromptSource, SessionConfig};
 use nephila_core::id::AgentId;
+use nephila_core::session_event::SessionEvent;
+use nephila_eventsourcing::store::DomainEventStore;
+use nephila_store::SqliteStore;
+use nephila_store::blob::SqliteBlobReader;
 use uuid::Uuid;
 
 #[tokio::main]
@@ -22,17 +28,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Held until after `shutdown()` — `.keep()` would leak the dir.
     let workdir = tempfile::tempdir()?;
+    let session_id = Uuid::new_v4();
+    let store = Arc::new(SqliteStore::open_in_memory(384)?);
+    let blob_reader = Arc::new(SqliteBlobReader::new(store.read_pool()));
     let cfg = SessionConfig {
         claude_binary: PathBuf::from(fake),
-        session_id: Uuid::new_v4(),
+        session_id,
         agent_id: AgentId::new(),
         working_dir: workdir.path().to_path_buf(),
         mcp_endpoint: "http://stub".into(),
         permission_mode: "bypassPermissions".into(),
+        store: Arc::clone(&store),
+        blob_reader,
     };
 
     let session = ClaudeCodeSession::start(cfg).await?;
-    let mut events = session.subscribe_drafts();
+
+    let mut stream = store
+        .subscribe_after("session", &session.aggregate_id(), 0)
+        .await?;
 
     let _ = session
         .send_turn(PromptSource::Human, "demo prompt: echo OK".into())
@@ -44,12 +58,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if remaining.is_zero() {
             break;
         }
-        match tokio::time::timeout(remaining, events.recv()).await {
-            Ok(Ok(ev)) => println!("{} {:?}", ev.kind(), ev),
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
-                eprintln!("warn: demo lagged by {n} events");
+        match tokio::time::timeout(remaining, stream.next()).await {
+            Ok(Some(Ok(env))) => {
+                match serde_json::from_value::<SessionEvent>(env.payload.clone()) {
+                    Ok(ev) => println!("{} {:?}", ev.kind(), ev),
+                    Err(e) => eprintln!("warn: decode payload: {e}"),
+                }
             }
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => break,
+            Ok(Some(Err(e))) => eprintln!("warn: stream error: {e}"),
+            Ok(None) | Err(_) => break,
         }
     }
 

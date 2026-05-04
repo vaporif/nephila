@@ -3,7 +3,6 @@ pub mod claude_code;
 pub mod config;
 pub mod dispatch;
 pub mod error;
-pub mod event_draft;
 pub mod hitl;
 pub mod message;
 pub mod openai_compatible;

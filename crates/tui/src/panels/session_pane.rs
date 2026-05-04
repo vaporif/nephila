@@ -1,6 +1,7 @@
 //! Minimal `SessionPane` rendering finalized assistant messages and prompts.
 //!
-//! Slice 1a: read-only. Slice 2 adds the `tui-textarea` input box.
+//! Slice 1b: read-only consumer of `nephila_core::SessionEvent`. Slice 2 adds
+//! the `tui-textarea` input box.
 //!
 //! Glyphs follow spec `§SessionPane.Pane behavior`:
 //!   `YOU →` (HumanPromptQueued), `AGENT →` (AgentPromptQueued),
@@ -12,7 +13,7 @@
 use std::collections::VecDeque;
 
 use chrono::{DateTime, Utc};
-use nephila_connector::event_draft::SessionEventDraft;
+use nephila_core::session_event::SessionEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::{Block, Borders, List, ListItem, Widget};
@@ -46,28 +47,28 @@ impl SessionPane {
         }
     }
 
-    /// Append a row for `ev`. Non-user-visible drafts (`SessionStarted`,
+    /// Append a row for `ev`. Non-user-visible events (`SessionStarted`,
     /// `*PromptDelivered`, in-flight `AssistantMessage` chunks) are dropped.
-    pub fn push_draft(&mut self, ev: SessionEventDraft) {
+    pub fn push_event(&mut self, ev: SessionEvent) {
         if let Some(row) = render_row(ev) {
             self.events.push_back(row);
         }
     }
 }
 
-fn render_row(ev: SessionEventDraft) -> Option<RenderedRow> {
+fn render_row(ev: SessionEvent) -> Option<RenderedRow> {
     match ev {
-        SessionEventDraft::HumanPromptQueued { text, ts, .. } => Some(RenderedRow {
+        SessionEvent::HumanPromptQueued { text, ts, .. } => Some(RenderedRow {
             glyph: "YOU →",
             text,
             timestamp: ts,
         }),
-        SessionEventDraft::AgentPromptQueued { text, ts, .. } => Some(RenderedRow {
+        SessionEvent::AgentPromptQueued { text, ts, .. } => Some(RenderedRow {
             glyph: "AGENT →",
             text,
             timestamp: ts,
         }),
-        SessionEventDraft::AssistantMessage {
+        SessionEvent::AssistantMessage {
             delta_text,
             is_final: true,
             ts,
@@ -77,12 +78,12 @@ fn render_row(ev: SessionEventDraft) -> Option<RenderedRow> {
             text: delta_text,
             timestamp: ts,
         }),
-        SessionEventDraft::ToolCall { tool_name, ts, .. } => Some(RenderedRow {
+        SessionEvent::ToolCall { tool_name, ts, .. } => Some(RenderedRow {
             glyph: "TOOL",
             text: tool_name,
             timestamp: ts,
         }),
-        SessionEventDraft::ToolResult {
+        SessionEvent::ToolResult {
             tool_use_id,
             is_error,
             ts,
@@ -96,43 +97,43 @@ fn render_row(ev: SessionEventDraft) -> Option<RenderedRow> {
             },
             timestamp: ts,
         }),
-        SessionEventDraft::CheckpointReached {
+        SessionEvent::CheckpointReached {
             checkpoint_id, ts, ..
         } => Some(RenderedRow {
             glyph: "✓ CHECKPOINT",
-            text: checkpoint_id,
+            text: checkpoint_id.to_string(),
             timestamp: ts,
         }),
-        SessionEventDraft::TurnCompleted {
+        SessionEvent::TurnCompleted {
             stop_reason, ts, ..
         } => Some(RenderedRow {
             glyph: "✓ END",
             text: stop_reason,
             timestamp: ts,
         }),
-        SessionEventDraft::TurnAborted { reason, ts, .. } => Some(RenderedRow {
+        SessionEvent::TurnAborted { reason, ts, .. } => Some(RenderedRow {
             glyph: "↺ ABORT",
             text: reason,
             timestamp: ts,
         }),
-        SessionEventDraft::SessionCrashed { reason, ts, .. } => Some(RenderedRow {
+        SessionEvent::SessionCrashed { reason, ts, .. } => Some(RenderedRow {
             glyph: "✗ CRASH",
             text: reason.lines().next().unwrap_or("").to_owned(),
             timestamp: ts,
         }),
-        SessionEventDraft::PromptDeliveryFailed { reason, ts, .. } => Some(RenderedRow {
+        SessionEvent::PromptDeliveryFailed { reason, ts, .. } => Some(RenderedRow {
             glyph: "✗ DROP",
             text: reason,
             timestamp: ts,
         }),
         // Drop: in-flight deltas, lifecycle markers, *PromptDelivered.
-        SessionEventDraft::AssistantMessage {
+        SessionEvent::AssistantMessage {
             is_final: false, ..
         }
-        | SessionEventDraft::SessionStarted { .. }
-        | SessionEventDraft::SessionEnded { .. }
-        | SessionEventDraft::HumanPromptDelivered { .. }
-        | SessionEventDraft::AgentPromptDelivered { .. } => None,
+        | SessionEvent::SessionStarted { .. }
+        | SessionEvent::SessionEnded { .. }
+        | SessionEvent::HumanPromptDelivered { .. }
+        | SessionEvent::AgentPromptDelivered { .. } => None,
     }
 }
 

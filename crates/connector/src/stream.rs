@@ -18,8 +18,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-
-use crate::event_draft::SessionEventDraft;
+use nephila_core::session_event::SessionEvent;
 
 const MAX_DELTAS: usize = 5;
 const MAX_BUFFERED_BYTES: usize = 200 * 1024;
@@ -38,7 +37,7 @@ struct MessageBuffer {
 }
 
 impl Coalescer {
-    pub(crate) fn push_delta(&mut self, message_id: &str, text: &str) -> Option<SessionEventDraft> {
+    pub(crate) fn push_delta(&mut self, message_id: &str, text: &str) -> Option<SessionEvent> {
         let buf = self
             .buffers
             .entry(message_id.to_owned())
@@ -59,7 +58,7 @@ impl Coalescer {
         None
     }
 
-    pub(crate) fn finalize(&mut self, message_id: &str) -> Option<SessionEventDraft> {
+    pub(crate) fn finalize(&mut self, message_id: &str) -> Option<SessionEvent> {
         self.buffers
             .remove(message_id)
             .map(|mut buf| emit(&mut buf, message_id, true))
@@ -69,7 +68,7 @@ impl Coalescer {
     // 250ms ticker into the reader task). Kept public-crate so its unit
     // test exercises the same surface.
     #[allow(dead_code)]
-    pub(crate) fn tick(&mut self, now: Instant) -> Vec<SessionEventDraft> {
+    pub(crate) fn tick(&mut self, now: Instant) -> Vec<SessionEvent> {
         let mut out = Vec::new();
         for (id, buf) in &mut self.buffers {
             if !buf.pending_text.is_empty() && now.duration_since(buf.last_flush) >= FLUSH_INTERVAL
@@ -81,17 +80,21 @@ impl Coalescer {
     }
 }
 
-fn emit(buf: &mut MessageBuffer, message_id: &str, is_final: bool) -> SessionEventDraft {
+fn emit(buf: &mut MessageBuffer, message_id: &str, is_final: bool) -> SessionEvent {
     let seq = buf.seq_in_message;
     buf.seq_in_message += 1;
     buf.pending_count = 0;
     buf.last_flush = Instant::now();
     let text = std::mem::take(&mut buf.pending_text);
-    SessionEventDraft::AssistantMessage {
+    SessionEvent::AssistantMessage {
         message_id: message_id.to_owned(),
         seq_in_message: seq,
         delta_text: text,
         is_final,
+        // Slice 1b: payload truncation is observability-only; not implemented
+        // in the reader path. `metrics::SESSION_EVENT_PAYLOAD_TRUNCATED` will
+        // count truncations once a downstream codepath introduces them.
+        truncated: false,
         ts: Utc::now(),
     }
 }
@@ -102,8 +105,8 @@ mod tests {
 
     use super::*;
 
-    fn unwrap_assistant(ev: SessionEventDraft) -> (String, u32, String, bool) {
-        if let SessionEventDraft::AssistantMessage {
+    fn unwrap_assistant(ev: SessionEvent) -> (String, u32, String, bool) {
+        if let SessionEvent::AssistantMessage {
             message_id,
             seq_in_message,
             delta_text,
@@ -113,7 +116,7 @@ mod tests {
         {
             (message_id, seq_in_message, delta_text, is_final)
         } else {
-            panic!("expected AssistantMessage, got {:?}", ev.kind());
+            panic!("expected AssistantMessage, got {}", ev.kind());
         }
     }
 

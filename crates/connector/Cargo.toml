@@ -12,8 +12,11 @@ categories.workspace = true
 
 [dependencies]
 nephila-core = { workspace = true }
+nephila-eventsourcing = { workspace = true }
+nephila-store = { workspace = true }
 tokio = { workspace = true, features = ["process", "sync", "fs", "time", "io-util", "rt"] }
 tokio-util = { workspace = true }
+futures = { workspace = true }
 libc = { workspace = true }
 nix = { workspace = true }
 serde = { workspace = true }
@@ -27,6 +30,7 @@ claude-codes = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
 tempfile = { workspace = true }
+futures = { workspace = true }
 
 [[bin]]
 name = "fake_claude"

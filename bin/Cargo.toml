@@ -13,12 +13,14 @@ categories.workspace = true
 [dependencies]
 nephila-core = { workspace = true }
 nephila-store = { workspace = true }
+nephila-eventsourcing = { workspace = true }
 nephila-lifecycle = { workspace = true }
 ferrex-core = { workspace = true }
 nephila-connector = { workspace = true }
 nephila-mcp = { workspace = true }
 nephila-tui = { workspace = true }
 tokio = { workspace = true }
+futures = { workspace = true }
 toml = { workspace = true }
 clap = { workspace = true }
 tracing = { workspace = true }
@@ -26,6 +28,7 @@ tracing-subscriber = { workspace = true }
 color-eyre = { workspace = true }
 dirs = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 ratatui = { workspace = true }
 chrono.workspace = true
 uuid = { workspace = true, features = ["v4"] }
