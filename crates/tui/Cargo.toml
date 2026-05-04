@@ -12,6 +12,7 @@ categories.workspace = true
 
 [dependencies]
 nephila-core = { workspace = true }
+nephila-connector = { workspace = true }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }
@@ -20,6 +21,7 @@ tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"

@@ -301,7 +301,7 @@ Commit: `slice-0: spike — validate CLI flags, claude_codes pubmods, --resume i
 - Modify: `crates/tui/src/panels.rs` — add `pub mod session_pane;`
 - Modify: `Cargo.toml` (root) and `crates/connector/Cargo.toml` — add `claude-codes` (`io`, `protocol` features only) and a `dev-dependencies` entry for the fake-claude path
 
-- [ ] **Step 1: Add `claude-codes` dependency to `crates/connector/Cargo.toml`.**
+- [x] **Step 1: Add `claude-codes` dependency to `crates/connector/Cargo.toml`.**
 
 ```toml
 [dependencies]
@@ -310,7 +310,7 @@ claude-codes = { version = "<pinned-from-spike>", default-features = false, feat
 
 Run: `cargo build -p nephila-connector`. Expected: builds; `claude_codes::io` and `claude_codes::protocol` resolve.
 
-- [ ] **Step 2: Write the failing test — fake-claude smoke.**
+- [x] **Step 2: Write the failing test — fake-claude smoke.**
 
 `crates/connector/tests/session_smoke.rs`:
 
@@ -359,12 +359,12 @@ fn target_dir() -> std::path::PathBuf {
 }
 ```
 
-- [ ] **Step 3: Run test to verify it fails.**
+- [x] **Step 3: Run test to verify it fails.**
 
 Run: `cargo test -p nephila-connector --test session_smoke -- --nocapture`
 Expected: compile error initially. Then add a stub `pub struct ClaudeCodeSession; impl ClaudeCodeSession { pub async fn start(...) -> ... { todo!() } pub fn subscribe_drafts(...) -> ... { todo!() } pub async fn send_turn(...) -> ... { todo!() } pub async fn shutdown(...) -> ... { todo!() } }` so the test compiles and panics on `todo!()`. That panic is the behavioral RED. Only after seeing the panic (not the compile error) proceed to Step 4.
 
-- [ ] **Step 4: Implement `event_draft::SessionEventDraft` (provisional).**
+- [x] **Step 4: Implement `event_draft::SessionEventDraft` (provisional).**
 
 `crates/connector/src/event_draft.rs` — enum mirroring the spec's `SessionEvent` variants verbatim, but holding `serde_json::Value` payloads. Adds a `kind(&self) -> &'static str` for the test's introspection. Replaced wholesale in 1b by `nephila_core::SessionEvent` — note the rollover is **not** a `pub use` re-export (payload types differ: draft uses `serde_json::Value`, real uses `ToolResultPayload`). Slice 1b's Task 3 step 12 deletes this file and rewrites every callsite in one pass; slice 1a callers must therefore not depend on exact draft variant shapes beyond what step 12 will provide.
 
@@ -416,7 +416,7 @@ impl SessionEventDraft {
 }
 ```
 
-- [ ] **Step 5: Implement `stream::Coalescer` for assistant deltas.**
+- [x] **Step 5: Implement `stream::Coalescer` for assistant deltas.**
 
 `crates/connector/src/stream.rs`:
 
@@ -490,7 +490,7 @@ fn emit(buf: &mut MessageBuffer, message_id: &str, is_final: bool) -> SessionEve
 }
 ```
 
-- [ ] **Step 6: Write Coalescer unit tests.**
+- [x] **Step 6: Write Coalescer unit tests.**
 
 In the same file, `#[cfg(test)] mod tests`:
 - 4 deltas → no emission; 5th delta → emit non-final.
@@ -500,7 +500,7 @@ In the same file, `#[cfg(test)] mod tests`:
 
 Run: `cargo test -p nephila-connector stream::tests -- --nocapture`. Expected: PASS.
 
-- [ ] **Step 7: Implement `ClaudeCodeSession::start` and `send_turn` and reader/writer tasks.**
+- [x] **Step 7: Implement `ClaudeCodeSession::start` and `send_turn` and reader/writer tasks.**
 
 `crates/connector/src/session.rs` — sole producer. Two tasks plus the `Coalescer`. Sketch:
 
@@ -631,12 +631,12 @@ loop turn in turns_rx.recv():
 
 `open_turn: Option<TurnId>` is shared between writer and reader through an `Arc<Mutex<Option<TurnId>>>` — writer sets it on `Delivered`, reader clears on `TurnCompleted`/`TurnAborted`/EOF.
 
-- [ ] **Step 8: Run smoke test until it passes.**
+- [x] **Step 8: Run smoke test until it passes.**
 
 Run: `cargo test -p nephila-connector --test session_smoke -- --nocapture`
 Expected (after implementation): PASS — `HumanPromptQueued`, `HumanPromptDelivered`, ≥1 `AssistantMessage`, exactly one `TurnCompleted`.
 
-- [ ] **Step 9: Implement `crates/connector/tests/fixtures/fake_claude/`.**
+- [x] **Step 9: Implement `crates/connector/tests/fixtures/fake_claude/`.**
 
 Standalone bin crate. Parses the same flag set as the real `claude` binary (the connector spawns the fake with these flags, so the fake MUST honour them or tests for resume/session-id stability will silently use a placeholder):
 
@@ -742,7 +742,7 @@ required-features = []
 
 Add a `build.rs` that exports the `fake_claude` binary path via `cargo:rustc-env=FAKE_CLAUDE_BIN=...` so tests don't need an env var, or use `env!("CARGO_BIN_EXE_fake_claude")` directly in tests (preferred — no build.rs).
 
-- [ ] **Step 10: Implement `Drop` and explicit `shutdown` correctly.**
+- [x] **Step 10: Implement `Drop` and explicit `shutdown` correctly.**
 
 `shutdown()` is the preferred path. `Drop` is best-effort cleanup for panic paths only — it cannot await async work.
 
@@ -782,7 +782,7 @@ impl Drop for ClaudeCodeSession {
 
 `shutdown()` is the preferred path: cancel, await reader to drain to EOF, append `SessionEnded`, await writer drain. After reader/writer drain → `child.wait().await?` to reap the process; if `wait` errors, log with `tracing::warn!`.
 
-- [ ] **Step 11: Add a TUI skeleton `SessionPane` that subscribes to drafts.**
+- [x] **Step 11: Add a TUI skeleton `SessionPane` that subscribes to drafts.**
 
 `crates/tui/src/panels/session_pane.rs` — minimal: holds `Vec<RenderedEvent>`, accepts `SessionEventDraft` over an `mpsc::Receiver` (slice 1a does not yet plumb this in via `subscribe_after`), renders a vertical list of finalized assistant messages and prompts. Skip toolresult/markdown/syntax-highlight rendering — slice 6.
 
@@ -820,7 +820,7 @@ impl Widget for &SessionPane {
 }
 ```
 
-- [ ] **Step 12: Add a TUI rendering test using `ratatui::backend::TestBackend`.**
+- [x] **Step 12: Add a TUI rendering test using `ratatui::backend::TestBackend`.**
 
 `crates/tui/tests/session_pane_render.rs`:
 
@@ -844,15 +844,23 @@ fn renders_three_rows() {
 
 Run: `cargo test -p nephila-tui --test session_pane_render`. Expected PASS.
 
-- [ ] **Step 13: Wire a single-agent demo in a temporary `bin/src/bin/demo_session.rs`.**
+- [x] **Step 13: Wire a single-agent demo in a temporary `bin/src/bin/demo_session.rs`.**
 
 Spawns one `ClaudeCodeSession` against the fake-claude, pipes drafts into a `SessionPane` via an mpsc bridge, runs the TUI for 5 seconds, exits. Manual verification only — delete the demo bin in slice 5. Run: `cargo run --bin demo_session`. Expected: terminal shows session pane updating live with the fake-claude's `OK` stream.
 
-- [ ] **Step 13a: Track scenarios `slow_reader`, `slow_writer`, `malformed` as TODO for slice 1b wiring; create issues or notes.**
+- [x] **Step 13a: Track scenarios `slow_reader`, `slow_writer`, `malformed` as TODO for slice 1b wiring; create issues or notes.**
 
 These fixture scenarios are defined in Step 9 but not exercised by slice 1a tests. File a tracking issue (or appendix note in this plan) listing the three scenarios and pointing to the slice 1b tests that will exercise them (Task 3 steps 1, 8, 13). If slice 1b ships without wiring them, drop them from the fixture rather than ship dead code.
 
-- [ ] **Step 14: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`.**
+**Tracking note (slice-1a):** the fake-claude fixture (`crates/connector/tests/fixtures/fake_claude/src/main.rs`) currently implements the `happy`, `crash_mid_turn`, `malformed`, `oversized_tool_result`, `slow_writer`, and `slow_reader` scenarios. Slice 1a only exercises `happy`. Slice 1b owners must wire the remaining three:
+
+- `malformed` → Task 3 step 1 (parse-error → `SessionCrashed` test)
+- `slow_writer` → Task 3 step 8 (writer-thread backpressure / ordering test)
+- `slow_reader` → Task 3 step 13 (broadcast-lag / `Lagged` recovery test)
+
+If slice 1b lands without wiring all three, the unused scenario branches must be deleted from the fake binary as part of slice 1b's `cargo clippy --workspace --all-targets -- -D warnings` gate (dead-code lint will catch it).
+
+- [x] **Step 14: `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`.**
 
 Expected: green. Commit: `slice-1a: ClaudeCodeSession transport (reader/writer/coalescer) and minimal SessionPane`.
 

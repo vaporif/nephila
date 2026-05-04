@@ -12,15 +12,25 @@ categories.workspace = true
 
 [dependencies]
 nephila-core = { workspace = true }
-tokio = { workspace = true, features = ["process", "sync", "fs", "time"] }
+tokio = { workspace = true, features = ["process", "sync", "fs", "time", "io-util", "rt"] }
+tokio-util = { workspace = true }
 libc = { workspace = true }
+nix = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+claude-codes = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tempfile = { workspace = true }
+
+[[bin]]
+name = "fake_claude"
+path = "tests/fixtures/fake_claude/src/main.rs"
 
 [lints]
 workspace = true
