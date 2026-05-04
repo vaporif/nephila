@@ -14,6 +14,29 @@ use tokio::sync::{broadcast, mpsc};
 use crate::supervisor::RestartTracker;
 use crate::token_tracker::TokenTracker;
 
+/// Compose the spawn-time prompt for an agent.
+///
+/// Substitutes the placeholders `{{agent_id}}`, `{{objective_id}}`, and
+/// `{{mcp_endpoint}}` in `template`, then appends a `# Your Task` section
+/// containing `objective_content`. Moved from `bin/src/orchestrator.rs` in
+/// slice 3 so the supervisor can re-use the helper when seeding a respawned
+/// session (slice 4).
+#[must_use]
+pub fn compose_next_prompt(
+    template: &str,
+    agent_id: AgentId,
+    objective_id: ObjectiveId,
+    mcp_endpoint: &str,
+    objective_content: &str,
+) -> String {
+    let protocol = template
+        .replace("{{agent_id}}", &agent_id.to_string())
+        .replace("{{objective_id}}", &objective_id.to_string())
+        .replace("{{mcp_endpoint}}", mcp_endpoint);
+
+    format!("{protocol}\n\n---\n\n# Your Task\n\n{objective_content}")
+}
+
 pub struct LifecycleSupervisor {
     token_trackers: HashMap<AgentId, TokenTracker>,
     restart_trackers: HashMap<ObjectiveId, RestartTracker>,
@@ -175,6 +198,36 @@ mod tests {
     use nephila_core::config::{LifecycleConfig, SupervisionConfig};
     use nephila_core::id::{AgentId, CheckpointId};
     use nephila_core::store::AgentStore;
+
+    #[test]
+    fn compose_next_prompt_interpolates_placeholders() {
+        let agent_id = AgentId::new();
+        let objective_id = ObjectiveId::new();
+        let result = compose_next_prompt(
+            "Agent {{agent_id}} on {{objective_id}} at {{mcp_endpoint}}",
+            agent_id,
+            objective_id,
+            "http://localhost:8080/mcp",
+            "do the thing",
+        );
+        assert!(result.contains(&agent_id.to_string()));
+        assert!(result.contains(&objective_id.to_string()));
+        assert!(result.contains("http://localhost:8080/mcp"));
+        assert!(result.contains("do the thing"));
+    }
+
+    #[test]
+    fn compose_next_prompt_appends_task_section() {
+        let result = compose_next_prompt(
+            "template",
+            AgentId::new(),
+            ObjectiveId::new(),
+            "http://localhost/mcp",
+            "my task",
+        );
+        assert!(result.contains("# Your Task"));
+        assert!(result.ends_with("my task"));
+    }
 
     fn test_lifecycle_config() -> LifecycleConfig {
         LifecycleConfig {

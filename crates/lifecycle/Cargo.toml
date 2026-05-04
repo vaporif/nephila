@@ -13,11 +13,14 @@ categories.workspace = true
 [dependencies]
 nephila-core = { workspace = true }
 nephila-store = { workspace = true }
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
 serde_json = { workspace = true }
+futures = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }
+proptest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
