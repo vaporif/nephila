@@ -2,11 +2,17 @@
 //!
 //! Claude streams partial assistant text token-by-token. Persisting every
 //! token would explode the event log; the coalescer buffers deltas keyed by
-//! `message_id` and flushes when any of:
-//!   - `MAX_DELTAS` deltas have accumulated since the last flush
-//!   - the buffer's text size approaches `MAX_BUFFERED_BYTES`
-//!   - `FLUSH_INTERVAL` has elapsed since the last flush
-//!   - the message is finalized via `finalize`
+//! `message_id` and flushes a single `AssistantMessage` event when one of:
+//!   - `MAX_DELTAS` (5) deltas are pending, OR
+//!   - `MAX_BUFFERED_BYTES` (200 KiB) is exceeded, OR
+//!   - `FLUSH_INTERVAL` (250 ms) has elapsed since the last flush AND a new
+//!     delta arrives (reactive — `push_delta` checks the elapsed time), OR
+//!   - `finalize` is called for the `message_id`.
+//!
+//! `tick()` is provided for a future *proactive* periodic-flush hookup
+//! (slice 2 wires a `tokio::time::interval`); it is not yet called by the
+//! reader task in slice 1a, so a buffer with pending deltas but no further
+//! arrivals will sit until either `finalize` runs or the next delta lands.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

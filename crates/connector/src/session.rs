@@ -281,7 +281,14 @@ impl Drop for ClaudeCodeSession {
         // Best-effort: panic-cleanup only. Operators should call shutdown().
         self.cancel.cancel();
         let child_opt = self.child.try_lock().ok().and_then(|mut g| g.take());
-        if let Some(child) = child_opt {
+        // `mut` is unused on tokio 1.51 (`Child::id(&self) -> Option<u32>`),
+        // but we mark it anyway so the binding stays correct if a future
+        // tokio bump returns `Child::id` to `&mut self` (its signature has
+        // wavered historically) or this Drop grows a `child.start_kill()`
+        // call. The lint suppression is paired with this comment so the
+        // intent isn't lost.
+        #[allow(unused_mut)]
+        if let Some(mut child) = child_opt {
             #[cfg(unix)]
             if let Some(pid) = child.id() {
                 use nix::sys::signal::{Signal, kill};
@@ -570,9 +577,16 @@ async fn writer_task(
                     });
                     continue;
                 }
-                if let Ok(mut g) = open_turn.lock() {
-                    *g = Some(turn.turn_id);
-                }
+                // ORDERING INVARIANT (slice 1a): emit `*PromptDelivered`
+                // *before* publishing `open_turn`. The reader can only emit
+                // `TurnCompleted` after a `Result` frame from claude, which
+                // claude can only send for a turn it has already received —
+                // i.e. one for which we successfully wrote to its stdin.
+                // Publishing `open_turn` first opens a tiny window where the
+                // reader could race ahead and emit `TurnCompleted` before
+                // subscribers see `*PromptDelivered`, violating the contract
+                // "every `*PromptQueued{turn_id}` is followed by exactly one
+                // of `{TurnCompleted, TurnAborted, PromptDeliveryFailed}`".
                 let delivered = match turn.source {
                     PromptSource::Human => SessionEventDraft::HumanPromptDelivered {
                         turn_id: turn.turn_id,
@@ -584,6 +598,9 @@ async fn writer_task(
                     },
                 };
                 let _ = drafts_tx.send(delivered);
+                if let Ok(mut g) = open_turn.lock() {
+                    *g = Some(turn.turn_id);
+                }
             }
             Err(e) => {
                 let _ = drafts_tx.send(SessionEventDraft::PromptDeliveryFailed {

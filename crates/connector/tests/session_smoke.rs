@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use nephila_connector::event_draft::SessionEventDraft;
 use nephila_connector::session::{ClaudeCodeSession, PromptSource, SessionConfig};
+use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 fn fake_claude_path() -> PathBuf {
@@ -12,11 +13,15 @@ fn fake_claude_path() -> PathBuf {
 
 #[tokio::test]
 async fn happy_turn_emits_assistant_then_result() {
+    // Hold the TempDir guard for the duration of the test so the directory
+    // and `.mcp.json` are cleaned up on drop. `keep()` would detach the guard
+    // and leak the dir on every test run.
+    let workdir = tempfile::tempdir().expect("tempdir");
     let cfg = SessionConfig {
         claude_binary: fake_claude_path(),
         session_id: Uuid::new_v4(),
         agent_id: nephila_core::id::AgentId::new(),
-        working_dir: tempfile::tempdir().unwrap().keep(),
+        working_dir: workdir.path().to_path_buf(),
         mcp_endpoint: "http://stub".into(),
         permission_mode: "bypassPermissions".into(),
     };
@@ -39,11 +44,16 @@ async fn happy_turn_emits_assistant_then_result() {
                     break;
                 }
             }
-            Err(_) => break,
+            Err(RecvError::Lagged(n)) => {
+                eprintln!("warn: smoke test lagged by {n} events");
+            }
+            Err(RecvError::Closed) => break,
         }
     }
 
     session.shutdown().await.expect("shutdown");
+    // Now drop the tempdir guard.
+    drop(workdir);
 
     let kinds: Vec<&'static str> = seen.iter().map(SessionEventDraft::kind).collect();
     assert!(kinds.contains(&"HumanPromptQueued"), "kinds = {kinds:?}");

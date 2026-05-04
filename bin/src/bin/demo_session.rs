@@ -20,12 +20,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "FAKE_CLAUDE_BIN env var required (path to the fake_claude binary built by `cargo build -p nephila-connector --tests`)"
     })?;
 
-    let workdir = tempfile::tempdir()?.keep();
+    // Hold the TempDir guard for the demo's lifetime so the directory and
+    // `.mcp.json` are cleaned up on exit. `keep()` would detach the guard
+    // and leak the dir on every run.
+    let workdir = tempfile::tempdir()?;
     let cfg = SessionConfig {
         claude_binary: PathBuf::from(fake),
         session_id: Uuid::new_v4(),
         agent_id: AgentId::new(),
-        working_dir: workdir,
+        working_dir: workdir.path().to_path_buf(),
         mcp_endpoint: "http://stub".into(),
         permission_mode: "bypassPermissions".into(),
     };
@@ -45,10 +48,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         match tokio::time::timeout(remaining, events.recv()).await {
             Ok(Ok(ev)) => println!("{} {:?}", ev.kind(), ev),
-            Ok(Err(_)) | Err(_) => break,
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(n))) => {
+                eprintln!("warn: demo lagged by {n} events");
+            }
+            Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) | Err(_) => break,
         }
     }
 
     session.shutdown().await?;
+    drop(workdir);
     Ok(())
 }
