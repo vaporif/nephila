@@ -1,5 +1,6 @@
 [package]
 name = "nephila"
+default-run = "nephila"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
