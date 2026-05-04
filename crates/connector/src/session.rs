@@ -331,6 +331,73 @@ impl ClaudeCodeSession {
     pub const fn agent_id(&self) -> AgentId {
         self.agent_id
     }
+
+    /// Read the OS pid of the underlying claude child, if it is still alive.
+    ///
+    /// Briefly locks the child mutex, reads `Child::id()`, releases. The
+    /// returned pid is a snapshot; callers must tolerate a TOCTOU race where
+    /// the child exits between this read and a subsequent syscall (e.g.
+    /// `kill`). Returns `None` if the child has been reaped (post `shutdown`)
+    /// or `Child::id()` has otherwise yielded `None`.
+    #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
+    pub async fn pid(&self) -> Option<u32> {
+        let guard = self.child.lock().await;
+        guard.as_ref().and_then(Child::id)
+    }
+
+    /// SIGSTOP the underlying claude OS process.
+    ///
+    /// **Important:** this halts the entire process — including any in-flight
+    /// tool call claude is waiting on. Operators should only invoke `pause()`
+    /// at a safe point (typically immediately after a `CheckpointReached`).
+    /// Resume with [`Self::resume_paused`].
+    ///
+    /// On non-Unix platforms this is a no-op (compile-time elided).
+    /// Returns `ConnectorError::Process` if the child is no longer alive.
+    #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
+    pub async fn pause(&self) -> Result<(), ConnectorError> {
+        #[cfg(unix)]
+        {
+            let pid = self.pid().await.ok_or_else(|| ConnectorError::Process {
+                exit_code: None,
+                stderr: "pause: no pid (child already gone)".into(),
+            })?;
+            send_signal(pid, nix::sys::signal::Signal::SIGSTOP).map_err(|e| {
+                ConnectorError::Process {
+                    exit_code: None,
+                    stderr: format!("pause: SIGSTOP failed: {e}"),
+                }
+            })?;
+        }
+        Ok(())
+    }
+
+    /// SIGCONT a previously-paused claude OS process.
+    ///
+    /// On non-Unix platforms this is a no-op (compile-time elided).
+    /// Returns `ConnectorError::Process` if the child is no longer alive.
+    #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
+    pub async fn resume_paused(&self) -> Result<(), ConnectorError> {
+        #[cfg(unix)]
+        {
+            let pid = self.pid().await.ok_or_else(|| ConnectorError::Process {
+                exit_code: None,
+                stderr: "resume: no pid (child already gone)".into(),
+            })?;
+            send_signal(pid, nix::sys::signal::Signal::SIGCONT).map_err(|e| {
+                ConnectorError::Process {
+                    exit_code: None,
+                    stderr: format!("resume: SIGCONT failed: {e}"),
+                }
+            })?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn send_signal(pid: u32, signal: nix::sys::signal::Signal) -> nix::Result<()> {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid.cast_signed()), signal)
 }
 
 impl Drop for ClaudeCodeSession {

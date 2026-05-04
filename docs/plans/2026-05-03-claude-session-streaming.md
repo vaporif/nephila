@@ -1905,7 +1905,7 @@ Run: `cargo test -p nephila-tui --test session_input_e2e -- --nocapture`. Expect
 - Create: `bin/src/session_registry.rs` — Task 5 lands a **stub** `SessionRegistry` exposing only `subscribe_session_started()` (returns a `broadcast::Receiver<AgentId>` whose sender is owned by an as-yet-empty placeholder); the real registry lands in Task 6 step 3 (which fills in `ensure_session`, `on_crash`, etc.). Task 5's stub is what unblocks the supervisor's `tokio::select!` — without it, Task 5 has a forward dependency on Task 6 across batches. The stub goes in this file so Task 6 only adds methods, never moves code between files.
 - Create: `crates/lifecycle/tests/checkpoint_pairing.rs` — property test for the (Checkpoint, Completed) state machine
 
-- [ ] **Step 1: Write property test for (Checkpoint, TurnCompleted) pairing.**
+- [x] **Step 1: Write property test for (Checkpoint, TurnCompleted) pairing.**
 
 `crates/lifecycle/tests/checkpoint_pairing.rs`:
 
@@ -1920,7 +1920,7 @@ Run: `cargo test -p nephila-tui --test session_input_e2e -- --nocapture`. Expect
 
 Run: `cargo test -p nephila-lifecycle --test checkpoint_pairing`. Expected: FAIL.
 
-- [ ] **Step 2: Implement the supervisor state machine.**
+- [x] **Step 2: Implement the supervisor state machine.**
 
 Per session, track:
 
@@ -1961,7 +1961,7 @@ on SessionCrashed(...):
   ask SessionRegistry to respawn (slice 4 wires it; slice 3 emits a placeholder BusEvent)
 ```
 
-- [ ] **Step 3: SIGSTOP/SIGCONT in the connector.**
+- [x] **Step 3: SIGSTOP/SIGCONT in the connector.**
 
 `crates/connector/src/session.rs`:
 
@@ -1984,17 +1984,17 @@ Document: Pause halts the OS process, not just the prompt loop. Any in-flight to
 
 Test: spawn fake_claude, pause, observe no further events for 1s, resume, observe events resume.
 
-- [ ] **Step 4: Move `compose_prompt` to lifecycle.**
+- [x] **Step 4: Move `compose_prompt` to lifecycle.**
 
 Cut/paste `compose_prompt` from `bin/src/orchestrator.rs:21` to `crates/lifecycle/src/lifecycle_supervisor.rs::compose_next_prompt`. Update its callers in the orchestrator to call the lifecycle helper instead. The orchestrator no longer needs to know about prompt composition — it only spawns and routes commands.
 
-- [ ] **Step 5: Recalibrate `RestartTracker` defaults and update sites.**
+- [x] **Step 5: Recalibrate `RestartTracker` defaults and update sites.**
 
 `crates/core/src/config.rs::SupervisionConfig::default()` — change `max_restarts` from 3 → 5 and `restart_window_secs` from 60 → 600. Document in `crates/lifecycle/src/supervisor.rs` doc-comment: "Counts crashes (not turn exits). Defaults assume each crash takes ~30s of recovery."
 
 `SessionCrashed` → `record_restart`. `SessionEnded` (clean) → reset tracker (new method `RestartTracker::reset()`). `TurnAborted` → no-op.
 
-- [ ] **Step 6: Migrate from BusEvent subscription to subscribe_after.**
+- [x] **Step 6: Migrate from BusEvent subscription to subscribe_after.**
 
 `LifecycleSupervisor::new` takes `Arc<dyn DomainEventStore>` instead of (or in addition to) `broadcast::Receiver<BusEvent>`. The supervisor's main loop, today reading `BusEvent`, becomes:
 
@@ -2025,11 +2025,11 @@ The `SessionRegistry::subscribe_session_started()` method returns a `broadcast::
 
 `BusEvent::CheckpointSaved` is now redundant for supervisor — keep the bus emission for slice 5 but the supervisor reads from `subscribe_after`.
 
-- [ ] **Step 7: Run property test until green.**
+- [x] **Step 7: Run property test until green.**
 
 Run: `cargo test -p nephila-lifecycle --test checkpoint_pairing`. Expected PASS.
 
-- [ ] **Step 8: Verify and commit.**
+- [x] **Step 8: Verify and commit.**
 
 `cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`. Commit: `slice-3: checkpoint-driven autonomy — (CheckpointReached, TurnCompleted) pairing, Pause SIGSTOP, RestartTracker recalibrated`.
 

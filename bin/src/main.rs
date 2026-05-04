@@ -1,4 +1,5 @@
 mod orchestrator;
+mod session_registry;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -163,6 +164,40 @@ async fn main() -> Result<()> {
         })
     };
 
+    // Slice 3: stand up the new session-event-driven supervisor alongside the
+    // legacy `BusEvent`-driven one. The registry is empty until slice 4 wires
+    // the orchestrator's `spawn` path to call `registry.fire_started(agent_id)`
+    // — until then the session_supervisor_handle is a parked task waiting for
+    // its first new-session notification.
+    let session_registry = Arc::new(session_registry::SessionRegistry::new());
+    let session_supervisor = Arc::new(tokio::sync::Mutex::new(
+        nephila_lifecycle::SessionSupervisor::new(sqlite_store.clone(), config.supervision.clone()),
+    ));
+    let session_supervisor_handle = {
+        let registry = session_registry.clone();
+        let _supervisor = session_supervisor.clone();
+        tokio::spawn(async move {
+            let mut new_agents_rx = registry.subscribe_session_started();
+            loop {
+                match new_agents_rx.recv().await {
+                    Ok(agent_id) => {
+                        // DEFERRED to slice 4 (Task 6 step 5a): wire JoinSet +
+                        // run_per_session. The agent_id → session_id lookup
+                        // requires the AgentSessionAssigned event, which slice 4
+                        // introduces. For now the SessionSupervisor is parked —
+                        // the legacy LifecycleSupervisor handles all session
+                        // traffic until the slice-4 cutover.
+                        tracing::debug!(%agent_id, "SessionSupervisor wiring deferred to slice 4");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(%n, "SessionRegistry lagged");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        })
+    };
+
     if cli.headless {
         tracing::info!("Running in headless mode, press Ctrl+C to stop");
         tokio::signal::ctrl_c()
@@ -189,6 +224,7 @@ async fn main() -> Result<()> {
     cancellation_token.cancel();
     cmd_handle.abort();
     lifecycle_handle.abort();
+    session_supervisor_handle.abort();
     let _ = mcp_handle.await;
 
     Ok(())

@@ -18,21 +18,6 @@ use tokio::sync::{RwLock, broadcast, mpsc};
 
 const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("../../config/agent_system_prompt.md");
 
-fn compose_prompt(
-    template: &str,
-    agent_id: AgentId,
-    objective_id: ObjectiveId,
-    mcp_endpoint: &str,
-    objective_content: &str,
-) -> String {
-    let protocol = template
-        .replace("{{agent_id}}", &agent_id.to_string())
-        .replace("{{objective_id}}", &objective_id.to_string())
-        .replace("{{mcp_endpoint}}", mcp_endpoint);
-
-    format!("{protocol}\n\n---\n\n# Your Task\n\n{objective_content}")
-}
-
 pub struct Orchestrator {
     agents: HashMap<AgentId, Agent>,
     connectors: HashMap<AgentId, TaskConnectorKind>,
@@ -229,7 +214,7 @@ impl Orchestrator {
             request_config: None,
         };
 
-        let prompt = compose_prompt(
+        let prompt = nephila_lifecycle::compose_next_prompt(
             SYSTEM_PROMPT_TEMPLATE,
             agent_id,
             objective_id,
@@ -442,23 +427,6 @@ mod tests {
     fn depth_of_unknown_agent_is_zero() {
         let orch = test_orchestrator(HashMap::new());
         assert_eq!(orch.agent_depth(AgentId::new()), 0);
-    }
-
-    #[test]
-    fn compose_prompt_interpolates_placeholders() {
-        let agent_id = AgentId::new();
-        let objective_id = ObjectiveId::new();
-        let result = compose_prompt(
-            "Agent {{agent_id}} on {{objective_id}} at {{mcp_endpoint}}",
-            agent_id,
-            objective_id,
-            "http://localhost:8080/mcp",
-            "do the thing",
-        );
-        assert!(result.contains(&agent_id.to_string()));
-        assert!(result.contains(&objective_id.to_string()));
-        assert!(result.contains("http://localhost:8080/mcp"));
-        assert!(result.contains("do the thing"));
     }
 
     fn activate_agent(agent: Agent) -> Agent {
@@ -675,18 +643,5 @@ mod tests {
         orch.publish(&events);
 
         assert!(event_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn compose_prompt_appends_task_section() {
-        let result = compose_prompt(
-            "template",
-            AgentId::new(),
-            ObjectiveId::new(),
-            "http://localhost/mcp",
-            "my task",
-        );
-        assert!(result.contains("# Your Task"));
-        assert!(result.ends_with("my task"));
     }
 }

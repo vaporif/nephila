@@ -2615,8 +2615,10 @@ name = "nephila-lifecycle"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures",
  "nephila-core",
  "nephila-store",
+ "proptest",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

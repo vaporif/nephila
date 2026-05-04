@@ -22,6 +22,9 @@ enum Scenario {
     OversizedToolResult,
     SlowWriter,
     SlowReader,
+    /// On each stdin line, emit one text frame, sleep 100ms, repeat — used by
+    /// pause/resume tests in slice 3 to verify SIGSTOP halts emissions.
+    SteadyDrip,
 }
 
 fn parse_args() -> Args {
@@ -39,6 +42,7 @@ fn parse_args() -> Args {
                     Some("oversized_tool_result") => Scenario::OversizedToolResult,
                     Some("slow_writer") => Scenario::SlowWriter,
                     Some("slow_reader") => Scenario::SlowReader,
+                    Some("steady_drip") => Scenario::SteadyDrip,
                     Some(other) => {
                         eprintln!("unknown scenario: {other}");
                         std::process::exit(2);
@@ -92,9 +96,33 @@ fn main() -> std::io::Result<()> {
                 emit_happy(&mut out, id)?;
             }
             Scenario::SlowReader => emit_burst(&mut out, id, 200)?,
+            Scenario::SteadyDrip => emit_steady_drip(&mut out, id)?,
         }
     }
     Ok(())
+}
+
+/// Emits ~10 text frames at 100ms intervals, then a result frame. Used by
+/// pause/resume tests: pausing mid-burst yields a fixed gap; resuming
+/// continues emission.
+fn emit_steady_drip(out: &mut impl Write, session_id: &str) -> std::io::Result<()> {
+    for i in 0..10 {
+        writeln!(
+            out,
+            "{{\"type\":\"assistant\",\"message\":{{\"id\":\"msg-drip\",\"role\":\"assistant\",\"model\":\"fake\",\"content\":[{{\"type\":\"text\",\"text\":\"d{i}\"}}]}},\"session_id\":\"{session_id}\"}}"
+        )?;
+        out.flush()?;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    writeln!(
+        out,
+        "{{\"type\":\"assistant\",\"message\":{{\"id\":\"msg-drip\",\"role\":\"assistant\",\"model\":\"fake\",\"content\":[{{\"type\":\"text\",\"text\":\"END\"}}],\"stop_reason\":\"end_turn\"}},\"session_id\":\"{session_id}\"}}"
+    )?;
+    writeln!(
+        out,
+        "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":1,\"duration_api_ms\":1,\"num_turns\":1,\"session_id\":\"{session_id}\",\"total_cost_usd\":0.0,\"stop_reason\":\"end_turn\"}}"
+    )?;
+    out.flush()
 }
 
 /// Canned happy frame sequence: two text deltas (same message id) then result.
