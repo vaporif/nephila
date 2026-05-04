@@ -20,9 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "FAKE_CLAUDE_BIN env var required (path to the fake_claude binary built by `cargo build -p nephila-connector --tests`)"
     })?;
 
-    // Hold the TempDir guard for the demo's lifetime so the directory and
-    // `.mcp.json` are cleaned up on exit. `keep()` would detach the guard
-    // and leak the dir on every run.
+    // Held until after `shutdown()` — `.keep()` would leak the dir.
     let workdir = tempfile::tempdir()?;
     let cfg = SessionConfig {
         claude_binary: PathBuf::from(fake),

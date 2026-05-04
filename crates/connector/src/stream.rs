@@ -175,7 +175,6 @@ mod tests {
     fn tick_after_flush_interval_flushes() {
         let mut c = Coalescer::default();
         c.push_delta("msg-1", "abc");
-        // Wait past the FLUSH_INTERVAL.
         sleep(FLUSH_INTERVAL + Duration::from_millis(20));
         let out = c.tick(Instant::now());
         assert_eq!(out.len(), 1);

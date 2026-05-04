@@ -7,15 +7,13 @@ use tokio::sync::broadcast::error::RecvError;
 use uuid::Uuid;
 
 fn fake_claude_path() -> PathBuf {
-    // Cargo guarantees this env var for `[[bin]]` entries when running tests for the same package.
+    // Set by cargo for any `[[bin]]` in the same package being tested.
     PathBuf::from(env!("CARGO_BIN_EXE_fake_claude"))
 }
 
 #[tokio::test]
 async fn happy_turn_emits_assistant_then_result() {
-    // Hold the TempDir guard for the duration of the test so the directory
-    // and `.mcp.json` are cleaned up on drop. `keep()` would detach the guard
-    // and leak the dir on every test run.
+    // Held until after `shutdown()` — `.keep()` would leak the dir.
     let workdir = tempfile::tempdir().expect("tempdir");
     let cfg = SessionConfig {
         claude_binary: fake_claude_path(),
@@ -52,7 +50,6 @@ async fn happy_turn_emits_assistant_then_result() {
     }
 
     session.shutdown().await.expect("shutdown");
-    // Now drop the tempdir guard.
     drop(workdir);
 
     let kinds: Vec<&'static str> = seen.iter().map(SessionEventDraft::kind).collect();

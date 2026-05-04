@@ -222,10 +222,8 @@ impl ClaudeCodeSession {
     /// Graceful teardown: cancel tasks, close stdin, await drain, reap child.
     #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
     pub async fn shutdown(self) -> Result<(), ConnectorError> {
-        // Signal cancellation so the reader/writer tasks fall out of their loops.
         self.cancel.cancel();
 
-        // Take and join the task handles.
         let reader = self.reader_handle.lock().await.take();
         let writer = self.writer_handle.lock().await.take();
         let stderr = self.stderr_handle.lock().await.take();
@@ -240,16 +238,14 @@ impl ClaudeCodeSession {
             let _ = h.await;
         }
 
-        // Append SessionEnded; broadcast may have no subscribers, so ignore the
-        // send result.
+        // Broadcast may have no subscribers; ignore the send result.
         let _ = self
             .drafts_tx
             .send(SessionEventDraft::SessionEnded { ts: Utc::now() });
 
-        // Reap the child. With kill_on_drop = false, we need to do this explicitly.
+        // `kill_on_drop = false`, so reap explicitly: SIGTERM, then wait.
         let maybe_child = self.child.lock().await.take();
         if let Some(mut child) = maybe_child {
-            // Best-effort: SIGTERM, then wait. If wait errors, log via tracing.
             #[cfg(unix)]
             if let Some(pid) = child.id() {
                 use nix::sys::signal::{Signal, kill};
@@ -278,7 +274,7 @@ impl ClaudeCodeSession {
 
 impl Drop for ClaudeCodeSession {
     fn drop(&mut self) {
-        // Best-effort: panic-cleanup only. Operators should call shutdown().
+        // Panic-cleanup path. Operators should prefer `shutdown().await`.
         self.cancel.cancel();
         let child_opt = self.child.try_lock().ok().and_then(|mut g| g.take());
         // `mut` is unused on tokio 1.51 (`Child::id(&self) -> Option<u32>`),
@@ -415,7 +411,7 @@ fn process_frame(
         | ClaudeOutput::ControlResponse(_)
         | ClaudeOutput::Error(_)
         | ClaudeOutput::RateLimitEvent(_) => {
-            // Slice 1a doesn't surface these as drafts; slice 1b records them.
+            // Slice 1b records these; slice 1a discards.
         }
         ClaudeOutput::Assistant(asst) => {
             let message_id = asst.message.id.clone();
@@ -462,13 +458,13 @@ fn process_frame(
                             ts: Utc::now(),
                         });
                     }
-                    // Slice 1a does not yet emit drafts for thinking/image/server tools.
+                    // thinking/image/server-tool blocks: not surfaced in slice 1a.
                     _ => {}
                 }
             }
-            // If the assistant message carries a stop_reason, finalize its
-            // coalesced text. Real claude marks this on the final partial frame;
-            // the fake fixture sets stop_reason on its second (last) frame.
+            // `stop_reason` on an assistant frame marks message close — both
+            // for real claude (final partial frame) and the fake fixture
+            // (second/last frame).
             if asst.message.stop_reason.is_some() {
                 if let Some(ev) = coalescer.finalize(&message_id) {
                     let _ = drafts_tx.send(ev);
@@ -477,8 +473,8 @@ fn process_frame(
             }
         }
         ClaudeOutput::Result(r) => {
-            // Flush any still-open assistant messages first so the renderer
-            // sees the final text before TurnCompleted lands.
+            // Flush still-open assistant messages so renderers see final text
+            // before `TurnCompleted` lands.
             for id in active_message_ids.drain(..) {
                 if let Some(ev) = coalescer.finalize(&id) {
                     let _ = drafts_tx.send(ev);

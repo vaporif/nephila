@@ -73,8 +73,9 @@ fn main() -> std::io::Result<()> {
     )?;
     out.flush()?;
 
+    // One stdin line drives one scripted response cycle; line content is ignored.
     for line in std::io::BufReader::new(std::io::stdin()).lines() {
-        let _ = line?; // drop content; scenario drives the response shape
+        let _ = line?;
         match args.scenario {
             Scenario::Happy => emit_happy(&mut out, id)?,
             Scenario::CrashMidTurn => {

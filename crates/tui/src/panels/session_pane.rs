@@ -46,8 +46,7 @@ impl SessionPane {
         }
     }
 
-    /// Translate a `SessionEventDraft` into a `RenderedRow` and push it.
-    /// Drafts that are not user-visible (e.g. `SessionStarted`,
+    /// Append a row for `ev`. Non-user-visible drafts (`SessionStarted`,
     /// `*PromptDelivered`, in-flight `AssistantMessage` chunks) are dropped.
     pub fn push_draft(&mut self, ev: SessionEventDraft) {
         if let Some(row) = render_row(ev) {
@@ -126,7 +125,7 @@ fn render_row(ev: SessionEventDraft) -> Option<RenderedRow> {
             text: reason,
             timestamp: ts,
         }),
-        // Slice 1a drops in-flight deltas, lifecycle markers, and prompt-delivered events.
+        // Drop: in-flight deltas, lifecycle markers, *PromptDelivered.
         SessionEventDraft::AssistantMessage {
             is_final: false, ..
         }
