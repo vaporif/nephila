@@ -230,7 +230,16 @@ impl SessionSupervisor {
                 });
                 SupervisorAction::Idle
             }
-            SessionEvent::TurnCompleted { .. } => {
+            SessionEvent::TurnCompleted { turn_id, .. } => {
+                if state.awaiting_turn_completion != Some(*turn_id) {
+                    tracing::debug!(
+                        %session_id,
+                        %turn_id,
+                        awaiting = ?state.awaiting_turn_completion,
+                        "TurnCompleted for unrelated turn; ignoring",
+                    );
+                    return SupervisorAction::Idle;
+                }
                 state.awaiting_turn_completion = None;
                 let cp = state.last_checkpoint.take();
                 let agent_id = state.agent_id;
@@ -269,6 +278,15 @@ impl SessionSupervisor {
             SessionEvent::TurnAborted {
                 turn_id, reason, ..
             } => {
+                if state.awaiting_turn_completion != Some(*turn_id) {
+                    tracing::debug!(
+                        %session_id,
+                        %turn_id,
+                        awaiting = ?state.awaiting_turn_completion,
+                        "TurnAborted for unrelated turn; ignoring",
+                    );
+                    return SupervisorAction::Idle;
+                }
                 state.awaiting_turn_completion = None;
                 state.last_checkpoint = None;
                 tracing::warn!(

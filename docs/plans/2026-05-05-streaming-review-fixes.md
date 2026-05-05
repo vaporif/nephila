@@ -567,11 +567,11 @@ The function is `pub fn handle_event(&mut self, session_id: SessionId, event: &S
 
 The actual `SessionEvent::TurnCompleted` carries `{turn_id: TurnId, stop_reason: String, ts: DateTime<Utc>}` (see `crates/core/src/session_event.rs:71`). Tests must include `stop_reason`.
 
-- [ ] **Step 1: Read the test harness in `crates/lifecycle/tests/checkpoint_pairing.rs`**
+- [x] **Step 1: Read the test harness in `crates/lifecycle/tests/checkpoint_pairing.rs`**
 
 Read the file first to identify the existing setup pattern: how a `SessionSupervisor` is constructed in tests, how events are delivered (call `handle_event` directly, or via a helper), how `awaiting_turn_completion` is observed, and how to count `send_agent_prompt` calls (likely via a fake `SessionDriver` impl). The Step 2 test must use the existing helpers — no new `SupervisorHarness` type from scratch.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Add to `crates/lifecycle/tests/checkpoint_pairing.rs`. Adapt names to match the harness discovered in Step 1; the sketch below assumes a fake driver records prompts in a `Vec<String>` shared via `Arc<Mutex<...>>`, and the supervisor exposes `awaiting_turn_completion(session_id)` (or the test introspects via a public field — choose whichever the file already uses).
 
@@ -626,12 +626,12 @@ fn supervisor_ignores_turn_completed_for_unrelated_turn() {
 }
 ```
 
-- [ ] **Step 3: Run test to verify it fails**
+- [x] **Step 3: Run test to verify it fails**
 
 Run: `cargo test -p nephila-lifecycle --test checkpoint_pairing supervisor_ignores -- --nocapture`
 Expected: FAIL — the unrelated `TurnCompleted` triggers a prompt and the second one returns `Idle` (because awaiting was already cleared).
 
-- [ ] **Step 4: Bind `turn_id` and gate on match**
+- [x] **Step 4: Bind `turn_id` and gate on match**
 
 In `crates/lifecycle/src/session_supervisor.rs`, replace the existing `SessionEvent::TurnCompleted { .. } =>` arm with:
 
@@ -658,17 +658,17 @@ Notes:
 - The early-out returns `SupervisorAction::Idle` — the outer function returns `SupervisorAction`. `return;` and `continue` are wrong.
 - Apply the same `turn_id` filter to the `TurnAborted` arm (line ~269-281) — it currently also clears `awaiting_turn_completion` unconditionally and is vulnerable to the same replay bug. Match on `turn_id`, compare to `state.awaiting_turn_completion`, ignore if mismatched. Add a sub-test if the existing test doesn't already cover this.
 
-- [ ] **Step 5: Run the test**
+- [x] **Step 5: Run the test**
 
 Run: `cargo test -p nephila-lifecycle --test checkpoint_pairing -- --nocapture`
 Expected: PASS for the new test AND all existing tests.
 
-- [ ] **Step 6: Run cargo check + clippy**
+- [x] **Step 6: Run cargo check + clippy**
 
 Run: `cargo check -p nephila-lifecycle && cargo clippy -p nephila-lifecycle -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```
 git add crates/lifecycle/src/session_supervisor.rs crates/lifecycle/tests/checkpoint_pairing.rs

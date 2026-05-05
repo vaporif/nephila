@@ -514,6 +514,123 @@ fn prompt_delivery_failed_does_not_block_next_cycle() {
     );
 }
 
+#[test]
+fn supervisor_ignores_turn_completed_for_unrelated_turn() {
+    let driver = FakeDriver::default();
+    let agent_id = AgentId::new();
+    let session_id = Uuid::new_v4();
+    let mut sup = SessionSupervisor::new_for_test();
+    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+
+    let turn_a = Uuid::new_v4();
+    let turn_b = Uuid::new_v4();
+    let now = Utc::now();
+
+    // Open turn A.
+    let _ = sup.handle_event_for_test(
+        session_id,
+        &SessionEvent::AgentPromptDelivered {
+            turn_id: turn_a,
+            ts: now,
+        },
+    );
+
+    let prompts_before = driver
+        .log
+        .lock()
+        .expect("log")
+        .actions
+        .iter()
+        .filter(|a| matches!(a, RecordedAction::SendTurnAgent))
+        .count();
+
+    // Inject TurnCompleted for an unrelated turn B — must be ignored.
+    let action = sup.handle_event_for_test(
+        session_id,
+        &SessionEvent::TurnCompleted {
+            turn_id: turn_b,
+            stop_reason: "end_turn".into(),
+            ts: now,
+        },
+    );
+
+    assert!(matches!(action, SupervisorAction::Idle));
+    let prompts_after = driver
+        .log
+        .lock()
+        .expect("log")
+        .actions
+        .iter()
+        .filter(|a| matches!(a, RecordedAction::SendTurnAgent))
+        .count();
+    assert_eq!(
+        prompts_after, prompts_before,
+        "no auto-prompt should fire for unrelated TurnCompleted",
+    );
+
+    // The awaited turn A must still close cleanly and trigger the prompt.
+    let action = sup.handle_event_for_test(
+        session_id,
+        &SessionEvent::TurnCompleted {
+            turn_id: turn_a,
+            stop_reason: "end_turn".into(),
+            ts: now,
+        },
+    );
+    assert!(
+        matches!(action, SupervisorAction::PromptedAgent),
+        "TurnCompleted for the awaited turn must clear and prompt; got {action:?}",
+    );
+}
+
+#[test]
+fn supervisor_ignores_turn_aborted_for_unrelated_turn() {
+    let driver = FakeDriver::default();
+    let agent_id = AgentId::new();
+    let session_id = Uuid::new_v4();
+    let mut sup = SessionSupervisor::new_for_test();
+    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+
+    let turn_a = Uuid::new_v4();
+    let turn_b = Uuid::new_v4();
+    let now = Utc::now();
+
+    // Open turn A.
+    let _ = sup.handle_event_for_test(
+        session_id,
+        &SessionEvent::AgentPromptDelivered {
+            turn_id: turn_a,
+            ts: now,
+        },
+    );
+
+    // Stale TurnAborted for turn B must not clear the await for turn A.
+    let action = sup.handle_event_for_test(
+        session_id,
+        &SessionEvent::TurnAborted {
+            turn_id: turn_b,
+            reason: "stale".into(),
+            ts: now,
+        },
+    );
+    assert!(matches!(action, SupervisorAction::Idle));
+
+    // Turn A's TurnCompleted must still trigger the prompt — proves the
+    // unrelated abort did not clear `awaiting_turn_completion`.
+    let action = sup.handle_event_for_test(
+        session_id,
+        &SessionEvent::TurnCompleted {
+            turn_id: turn_a,
+            stop_reason: "end_turn".into(),
+            ts: now,
+        },
+    );
+    assert!(
+        matches!(action, SupervisorAction::PromptedAgent),
+        "stale TurnAborted should not have cleared the active turn's await; got {action:?}",
+    );
+}
+
 // Suppress unused-variant warning on `SupervisorAction` if the supervisor
 // happens not to surface every variant inline.
 #[allow(dead_code)]
