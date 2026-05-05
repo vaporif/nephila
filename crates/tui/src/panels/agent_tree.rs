@@ -76,7 +76,7 @@ pub struct AgentTreeNode {
     pub session_id: Option<String>,
     pub directory: Option<PathBuf>,
     pub has_session: bool,
-    /// Slice 2: last `SessionEvent` kind observed by the agent's pump task,
+    /// Last `SessionEvent` kind observed by the agent's pump task,
     /// e.g. `"running"`, `"checkpoint"`, `"crashed"`. Drives the activity
     /// glyph rendered next to the agent's name.
     pub last_session_event: Option<&'static str>,
@@ -256,7 +256,11 @@ impl StatefulWidget for AgentTreeWidget {
             .map(|(i, item)| {
                 let indent = "  ".repeat(item.depth);
                 let arrow = if item.has_children {
-                    if item.is_expanded { "v " } else { "> " }
+                    if item.is_expanded {
+                        "v "
+                    } else {
+                        "> "
+                    }
                 } else {
                     "  "
                 };

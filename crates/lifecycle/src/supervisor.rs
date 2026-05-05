@@ -5,14 +5,15 @@ use nephila_core::config::SupervisionConfig;
 
 /// Counts **crashes** (not turn exits) within a sliding window.
 ///
-/// Slice 3 recalibration: with the streaming `ClaudeCodeSession` the only
-/// signal that increments this tracker is `SessionEvent::SessionCrashed` —
-/// turn-level events (`TurnAborted`, `TurnCompleted`) are no-ops because the
-/// process keeps running across turns. Defaults assume each crash takes ~30s
-/// of recovery time (kill old child, acquire lockfile, respawn, replay).
+/// With the streaming `ClaudeCodeSession`, the only signal that increments
+/// this tracker is `SessionEvent::SessionCrashed` — turn-level events
+/// (`TurnAborted`, `TurnCompleted`) are no-ops because the process keeps
+/// running across turns. Defaults assume each crash takes ~30s of recovery
+/// time (kill old child, acquire lockfile, respawn, replay).
 ///
-/// Call `reset()` after a clean `SessionEnded` so a long-running session that
-/// retired without crashes does not leak crash credits to the next session.
+/// Call `reset()` after a clean `SessionEnded` so a long-running session
+/// that retired without crashes does not leak crash credits to the next
+/// session.
 #[derive(Debug)]
 pub struct RestartTracker {
     config: SupervisionConfig,

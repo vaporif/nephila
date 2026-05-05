@@ -184,15 +184,14 @@ fn default_strategy() -> String {
     "one_for_one".into()
 }
 fn default_max_restarts() -> u32 {
-    // Slice 3 recalibration: counts crashes (not turn exits). With a streaming
-    // session the supervisor only records a restart on `SessionCrashed`, which
-    // is rarer than the previous per-turn `claude -p` exit signal; bump from 3.
+    // Counts crashes (not turn exits). With a streaming session the
+    // supervisor records a restart only on `SessionCrashed`, which is rarer
+    // than the old per-turn `claude -p` exit signal.
     5
 }
 fn default_restart_window_secs() -> u64 {
-    // Slice 3 recalibration: 10-minute window assumes each crash takes ~30s of
-    // recovery (kill, lockfile, respawn, replay). Was 60s under the old
-    // per-turn-exit semantics.
+    // 10-minute window: assumes each crash takes ~30s of recovery (kill,
+    // lockfile, respawn, replay).
     600
 }
 fn default_max_agent_depth() -> u32 {

@@ -47,8 +47,8 @@ impl std::fmt::Debug for BroadcastRegistry {
 /// head-snapshot. Used by the listener-first ordering test in
 /// `tests/subscribe_after_ordering.rs`.
 ///
-/// Gated behind `cfg(any(test, feature = "test-seam"))` so it is absent from
-/// release builds (ADR-0002 / plan step 13).
+/// Gated behind `cfg(any(test, feature = "test-seam"))` so it is absent
+/// from release builds (per ADR-0002).
 #[cfg(any(test, feature = "test-seam"))]
 #[derive(Default, Clone)]
 pub struct SubscribeAfterHooks {

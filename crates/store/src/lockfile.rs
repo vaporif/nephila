@@ -1,7 +1,8 @@
-//! Cross-process lockfile (placeholder; full wiring in slice 4).
+//! Cross-process lockfile.
 //!
 //! `WorkdirLock` `flock`s `~/.nephila/<workdir-hash>.lock` on construction
-//! and releases on drop. Slice 4 wires it into `bin/orchestrator.rs::main`.
+//! and releases on drop. Wired in from `bin/src/main.rs` so a second
+//! orchestrator against the same workdir errors out at boot.
 
 use nix::fcntl::{Flock, FlockArg};
 use std::fs::{File, OpenOptions};
@@ -19,7 +20,7 @@ pub enum LockfileError {
 }
 
 /// RAII lockfile. Acquired with `flock(LOCK_EX | LOCK_NB)`; released on drop.
-#[must_use = "WorkdirLock releases on drop; bind it to a long-lived local"]
+#[must_use = "drop releases the lock immediately; bind to a long-lived local to keep it acquired"]
 pub struct WorkdirLock {
     _flock: Flock<File>,
     path: PathBuf,

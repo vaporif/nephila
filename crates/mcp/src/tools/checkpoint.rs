@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
 use nephila_core::channel::{merge_channels, validate_channels};
 use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk};
-// `BusEvent` import removed in slice-1b step 18a — the connector reader is the
-// sole producer of checkpoint events post-1b.
+// `BusEvent` import removed: the connector reader is the sole producer of
+// checkpoint events.
 // use nephila_core::event::BusEvent;
 use nephila_core::id::CheckpointId;
 use nephila_core::store::{AgentStore, CheckpointStore, InterruptStore};
@@ -215,11 +215,11 @@ impl AsyncTool<NephilaMcpServer> for SerializeAndPersistTool {
                 .map_err(nephila_err)?;
         }
 
-        // Slice-1b (Task 3 step 18a): the connector reader is the sole
-        // producer of `SessionEvent::CheckpointReached`. Emitting
-        // `BusEvent::CheckpointSaved` here would make BOTH paths fire and
-        // the TUI would render a double HITL modal. The bus arm itself stays
-        // in place until slice 6 deletion; we just stop emitting.
+        // The connector reader is the sole producer of
+        // `SessionEvent::CheckpointReached`. Emitting `BusEvent::CheckpointSaved`
+        // here would make both paths fire and the TUI would render a double
+        // HITL modal. The bus arm stays in place pending future deletion;
+        // we just stop emitting.
         let _ = checkpoint_id; // keep the binding stable for future use
         let _ = agent_id;
 

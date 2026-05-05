@@ -1,29 +1,22 @@
 //! `SessionSupervisor` — checkpoint-driven autonomy loop.
 //!
-//! Slice 3: replaces today's `BusEvent`-driven `LifecycleSupervisor` for the
-//! per-session control flow with a state machine that consumes `SessionEvent`s
-//! produced by the connector. The pair `(CheckpointReached, TurnCompleted)`
-//! is the trigger for the next autonomy step:
+//! Drives per-session control flow off `SessionEvent`s produced by the
+//! connector. The pair `(CheckpointReached, TurnCompleted)` triggers the next
+//! autonomy step:
 //!
-//!   - `interrupt = None`     → compose next prompt and `send_turn(Agent, ..)`
+//!   - `interrupt = None`        → compose next prompt and `send_turn(Agent, ..)`
 //!   - `interrupt = Some(Hitl)`  → stay quiet; the operator drives next via TUI
 //!   - `interrupt = Some(Pause)` → SIGSTOP the child via `session.pause()`
 //!   - `interrupt = Some(Drain)` → graceful `session.shutdown()`
 //!
-//! `TurnAborted` is a recoverable signal that does NOT auto-prompt — the
-//! operator decides whether to continue. `PromptDeliveryFailed` is logged but
-//! does not block the next checkpoint cycle.
+//! `TurnAborted` is recoverable and does not auto-prompt — the operator
+//! decides whether to continue. `PromptDeliveryFailed` is logged but does
+//! not block the next checkpoint cycle.
 //!
 //! The supervisor uses a `SessionDriver` trait so tests can substitute a
-//! call-recording fake. In production the only impl wraps `Arc<ClaudeCodeSession>`
+//! call-recording fake. The production impl wraps `Arc<ClaudeCodeSession>`
 //! in a thin shim that translates the trait calls into `send_turn` / `pause` /
 //! `shutdown`.
-//!
-//! Slice 3 ships the state machine, the `SessionDriver` trait,
-//! [`run_per_session`], and the registry stub. The bridge from
-//! `SessionRegistry` → `run_per_session` lands in slice 4 (Task 6 step 5a)
-//! once `Agent::session_id` exists. Until then the supervisor is exercised
-//! only by `crates/lifecycle/tests/checkpoint_pairing.rs`'s proptest.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -66,9 +59,9 @@ struct PerSession {
     awaiting_turn_completion: Option<TurnId>,
     phase: SessionPhase,
     driver: Arc<dyn SessionDriver>,
-    /// Crash budget — incremented on `SessionCrashed`, cleared on
-    /// `SessionEnded`. Slice 4's registry consults
-    /// `restart_tracker.record_restart()` before respawning a crashed session.
+    /// Crash budget: incremented on `SessionCrashed`, cleared on
+    /// `SessionEnded`. The registry consults `record_restart()` before
+    /// respawning a crashed session.
     restart_tracker: RestartTracker,
 }
 
@@ -157,8 +150,7 @@ impl SessionSupervisor {
     }
 
     /// Test seam: register a session with a fake driver before driving events.
-    /// The production registry calls `attach_session` (no `_for_test` suffix)
-    /// — see `LifecycleSupervisor` once the registry lands in slice 4.
+    /// Production callers go through `attach_session` (no `_for_test` suffix).
     pub fn attach_session_for_test<D: SessionDriver + 'static>(
         &mut self,
         agent_id: AgentId,
@@ -381,10 +373,9 @@ pub async fn run_per_session(supervisor: Arc<Mutex<SessionSupervisor>>, session_
 
 /// Compose the next per-turn continuation prompt for an autonomous agent.
 ///
-/// Today this is a static "continue" string — the spawn-time prompt
-/// (system prompt + objective) lives in
-/// [`crate::lifecycle_supervisor::compose_next_prompt`]. Slice 5+ may inject
-/// richer state-aware context (memory recap, recent activity).
+/// Currently a static "continue" string. The spawn-time prompt (system
+/// prompt + objective) lives in
+/// [`crate::lifecycle_supervisor::compose_next_prompt`].
 #[must_use]
 pub fn compose_continuation_prompt(agent_id: AgentId) -> String {
     format!(

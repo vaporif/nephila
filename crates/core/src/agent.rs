@@ -86,10 +86,10 @@ pub struct Agent {
     pub id: AgentId,
     pub state: AgentState,
     pub directive: Directive,
-    /// Stringified UUID of the underlying claude session. Slice 4 introduces
-    /// `AgentEvent::AgentSessionAssigned { session_id: SessionId, .. }` which
-    /// writes to this same field via the reducer (kept as `Option<String>`
-    /// for SQL-storage continuity with the slice-2/3 schema).
+    /// Stringified UUID of the underlying claude session.
+    /// `AgentEvent::AgentSessionAssigned { session_id: SessionId, .. }`
+    /// writes to this field via the reducer. Stored as `Option<String>` for
+    /// SQL-storage continuity with earlier schemas.
     pub session_id: Option<String>,
     pub directory: PathBuf,
     pub objective_id: ObjectiveId,
@@ -98,7 +98,7 @@ pub struct Agent {
     pub origin: SpawnOrigin,
     pub children: Vec<AgentId>,
     pub injected_message: Option<String>,
-    /// Persisted snapshot of the non-volatile `SessionConfig` fields (slice 4).
+    /// Persisted snapshot of the non-volatile `SessionConfig` fields.
     /// `cfg_from(agent)` rebuilds a `SessionConfig` for `ClaudeCodeSession::resume`
     /// using these values; agents that predate the snapshot event fall back
     /// to defaults sourced from CLI args (with a warn log).
@@ -161,17 +161,17 @@ pub enum AgentEvent {
         tokens_used: u64,
         threshold: u64,
     },
-    /// Slice 4: the orchestrator/registry has bound a `claude` session id to
-    /// this agent. Reducer sets `agent.session_id = Some(session_id.to_string())`.
+    /// The orchestrator/registry has bound a `claude` session id to this
+    /// agent. Reducer sets `agent.session_id = Some(session_id.to_string())`.
     AgentSessionAssigned {
         agent_id: AgentId,
         session_id: SessionId,
         ts: DateTime<Utc>,
     },
-    /// Slice 4: persisted snapshot of the non-volatile `SessionConfig` fields,
-    /// emitted on agent configure / spawn so `cfg_from(agent)` can rebuild a
-    /// `SessionConfig` after an orchestrator restart without re-asking the
-    /// operator.
+    /// Persisted snapshot of the non-volatile `SessionConfig` fields,
+    /// emitted on agent configure / spawn so `cfg_from(agent)` can rebuild
+    /// a `SessionConfig` after an orchestrator restart without re-asking
+    /// the operator.
     AgentConfigSnapshotted {
         agent_id: AgentId,
         snapshot: AgentConfigSnapshot,
@@ -675,13 +675,11 @@ mod tests {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Kill).unwrap();
         let agent = apply_all(agent, &events);
-        assert!(
-            agent
-                .handle(AgentCommand::SetSession {
-                    session_id: "s".into()
-                })
-                .is_err()
-        );
+        assert!(agent
+            .handle(AgentCommand::SetSession {
+                session_id: "s".into()
+            })
+            .is_err());
     }
 
     #[test]

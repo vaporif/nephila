@@ -163,7 +163,7 @@ pub fn init_db(conn: &Connection) -> Result<(), rusqlite::Error> {
 /// COLUMN` errors with `duplicate column name` if the column already exists;
 /// we swallow that specific error so the migration is idempotent.
 fn apply_post_create_migrations(conn: &Connection) -> Result<(), rusqlite::Error> {
-    // Slice 4: agents.last_config_snapshot — JSON-encoded `AgentConfigSnapshot`,
+    // agents.last_config_snapshot — JSON-encoded `AgentConfigSnapshot`,
     // populated by `AgentEvent::AgentConfigSnapshotted` reducer projections.
     add_column_if_missing(conn, "agents", "last_config_snapshot", "TEXT")?;
     Ok(())

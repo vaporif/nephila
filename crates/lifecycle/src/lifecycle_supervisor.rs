@@ -18,9 +18,9 @@ use crate::token_tracker::TokenTracker;
 ///
 /// Substitutes the placeholders `{{agent_id}}`, `{{objective_id}}`, and
 /// `{{mcp_endpoint}}` in `template`, then appends a `# Your Task` section
-/// containing `objective_content`. Moved from `bin/src/orchestrator.rs` in
-/// slice 3 so the supervisor can re-use the helper when seeding a respawned
-/// session (slice 4).
+/// containing `objective_content`. Lives here (rather than in
+/// `bin/src/orchestrator.rs`) so the supervisor can re-use it when seeding
+/// a respawned session.
 #[must_use]
 pub fn compose_next_prompt(
     template: &str,

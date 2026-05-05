@@ -33,9 +33,9 @@ pub struct Session {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionCommand {
-    /// Slice 1b: empty — connector emits events directly via the store.
-    /// `handle()` exists for symmetry with `Agent` and the post-1b control
-    /// protocol; future commands will land here.
+    /// No commands today: the connector emits events directly via the
+    /// store. `handle()` exists for symmetry with `Agent` and the future
+    /// control protocol; new commands will land here.
     NoOp,
 }
 

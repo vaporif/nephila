@@ -1,9 +1,9 @@
-//! Observability counters and histograms for the slice-1b store primitives.
+//! Observability counters and histograms for the store primitives.
 //!
-//! The codebase doesn't yet use a centralised metrics backend (no `metrics`
-//! crate, no `prometheus`); existing observability flows through `tracing`.
-//! These helpers wrap `tracing::info!` events with a stable target string so
-//! a future metrics backend can scrape them without touching call sites.
+//! The codebase has no centralised metrics backend (no `metrics` crate,
+//! no `prometheus`); observability flows through `tracing`. These helpers
+//! wrap `tracing::info!` events with a stable target string so a future
+//! metrics backend can scrape them without touching call sites.
 
 use tracing::info;
 
@@ -84,7 +84,7 @@ pub fn record_session_respawn(aggregate_id: &str) {
         target: TARGET,
         metric = "session.respawn_total",
         aggregate_id = aggregate_id,
-        "session respawn (slice 4 wires this)",
+        "session respawn",
     );
 }
 
@@ -94,7 +94,7 @@ pub fn record_session_fallback_to_session_id(aggregate_id: &str) {
         target: TARGET,
         metric = "session.fallback_to_session_id_total",
         aggregate_id = aggregate_id,
-        "session fallback to session_id (slice 4 wires this)",
+        "session fallback to session_id",
     );
 }
 

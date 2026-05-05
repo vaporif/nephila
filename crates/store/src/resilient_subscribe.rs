@@ -1,9 +1,10 @@
 //! Lagged-recovery wrapper around `subscribe_after`.
 //!
-//! Slice 1b consumers (TUI pump, supervisor) wrap their `subscribe_after`
-//! call with `resilient_subscribe`, which retries on `Lagged` by re-subscribing
-//! from the last seen sequence. If the retry budget is exhausted within a
-//! window the wrapper escalates to `EventStoreError::PersistentLag`.
+//! Consumers (TUI pump, supervisor, registry crash-watcher) wrap their
+//! `subscribe_after` call with `resilient_subscribe`, which retries on
+//! `Lagged` by re-subscribing from the last seen sequence. If the retry
+//! budget is exhausted within a window the wrapper escalates to
+//! `EventStoreError::PersistentLag`.
 //!
 //! The retry counter is sticky across cooldowns to prevent livelock under
 //! sustained burst traffic — only a `QUIET_PERIOD` of clean `recv`s resets it.

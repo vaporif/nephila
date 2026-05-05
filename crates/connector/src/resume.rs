@@ -2,11 +2,11 @@
 //! `claude --resume <id>` → `claude --session-id <id>` path.
 //!
 //! The "resume target not found" stderr signature is observed empirically.
-//! TODO(slice-0 spike): tighten this once Task 1's spike artifact captures the
-//! exact verbatim stderr from a real `claude --resume` against a missing id.
-//! Until then we keep the matcher loose (case-insensitive substring scan over
-//! a small set of known phrasings) to avoid false negatives that would leave
-//! a fresh session-id stuck in a hard error.
+//! TODO: tighten once we have a verbatim capture of real `claude --resume`
+//! stderr against a missing id. Until then we keep the matcher loose
+//! (case-insensitive substring scan over a small set of known phrasings)
+//! to avoid false negatives that would leave a fresh session-id stuck in
+//! a hard error.
 
 /// Phrases real `claude` is observed (or expected) to print on stderr when
 /// `--resume <id>` is passed an id with no on-disk session record.

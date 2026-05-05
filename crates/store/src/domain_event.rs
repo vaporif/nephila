@@ -1,9 +1,8 @@
 //! `DomainEventStore` impl on `SqliteStore`.
 //!
-//! Slice 1b (ADR-0002): the writer thread now stamps sequences inside the
-//! INSERT transaction. `append_batch` is the new typed entry point;
-//! `append` is preserved for back-compat — it routes to `append_batch`
-//! with a single envelope.
+//! Per ADR-0002, the writer thread stamps sequences inside the INSERT
+//! transaction. `append_batch` is the typed entry point; `append` routes
+//! to `append_batch` with a single envelope for back-compat.
 
 use crate::SqliteStore;
 use crate::blob::PreparedBlob;
@@ -273,10 +272,10 @@ impl SqliteStore {
         Ok(Box::pin(stream))
     }
 
-    /// `subscribe_after` with test-only hooks injected between listener-attach
-    /// and head-snapshot. Gated behind `cfg(any(test, feature = "test-seam"))`
-    /// so it is absent from release builds (ADR-0002 / plan step 13).
-    /// Production callers go through the trait method.
+    /// `subscribe_after` with test-only hooks injected between
+    /// listener-attach and head-snapshot. Gated behind
+    /// `cfg(any(test, feature = "test-seam"))` so it is absent from release
+    /// builds. Production callers go through the trait method.
     #[cfg(any(test, feature = "test-seam"))]
     pub async fn subscribe_after_with_hooks(
         &self,
@@ -309,12 +308,11 @@ impl SqliteStore {
     /// Per-aggregate `DashMap` prevents thundering-herd snapshotting.
     ///
     /// Trigger A (producer-side, on `SessionEnded` in
-    /// `crates/connector/src/session.rs`) is deferred to the slice-1b
-    /// integration window — see Task 3 step 12 in
-    /// `docs/plans/2026-05-03-claude-session-streaming.md`.
+    /// `crates/connector/src/session.rs`) is handled separately at the
+    /// connector seam.
     fn maybe_spawn_snapshot_task(&self, agg_type: String, agg_id: String, head_at_subscribe: u64) {
-        // Only sessions get snapshot trigger B in slice 1b. Other aggregates
-        // continue to manage snapshots externally.
+        // Only sessions get snapshot trigger B; other aggregates manage
+        // snapshots externally.
         if agg_type != "session" {
             return;
         }
@@ -392,9 +390,9 @@ impl SqliteStore {
         .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
     }
 
-    /// Internal helper for `append_batch_with_blobs` — used by step 11
-    /// (connector ToolResult spillover). Atomic: blob rows + event rows in
-    /// one SQLite transaction.
+    /// Internal helper used by the connector when a `ToolResult` spills to
+    /// the blob store. Atomic: blob rows + event rows in one SQLite
+    /// transaction.
     pub async fn append_batch_with_blobs(
         &self,
         envelopes: Vec<EventEnvelope>,
@@ -422,9 +420,9 @@ impl SqliteStore {
     /// regression tests in `tests/sequence_stamping_upgrade.rs`.
     ///
     /// Gated behind `cfg(any(test, feature = "test-seam"))` so it is absent
-    /// from release builds (ADR-0002 / plan step 4). Integration tests under
-    /// `tests/` enable the feature via the self-referencing dev-dependency
-    /// in `crates/store/Cargo.toml`.
+    /// from release builds (per ADR-0002). Integration tests under `tests/`
+    /// enable the feature via the self-referencing dev-dependency in
+    /// `crates/store/Cargo.toml`.
     #[cfg(any(test, feature = "test-seam"))]
     #[doc(hidden)]
     pub async fn raw_seed_for_test(&self, agg_type: &str, agg_id: &str, sequences: &[u64]) {

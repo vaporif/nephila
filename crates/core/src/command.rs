@@ -46,10 +46,10 @@ pub enum OrchestratorCommand {
     },
 }
 
-// SECURITY (H-S2): do not use `..` in destructuring — every field must be listed
-// so new sensitive fields are caught at review time. Adding a variant or a field
-// to an existing variant fails compilation here, forcing an explicit redaction
-// decision.
+// SECURITY: do not use `..` in destructuring — every field must be listed so
+// new sensitive fields are caught at review time. Adding a variant or a field
+// to an existing variant fails compilation here, forcing an explicit
+// redaction decision.
 impl std::fmt::Debug for OrchestratorCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

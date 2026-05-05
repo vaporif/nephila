@@ -2,10 +2,10 @@
 //! `RenderedBuffer` (and optionally an activity-glyph mpsc + a HITL request
 //! mpsc).
 //!
-//! Slice 4 will own the `SessionRegistry` that owns these tasks; slice 2
-//! exposes the spawn helper so the demo binary and the e2e test can wire
-//! the pump manually. The pump terminates on stream end (`SessionEnded`,
-//! `SessionCrashed`) or when the returned `JoinHandle` is dropped.
+//! `spawn_pump` is exposed so callers (the e2e test, the orchestrator)
+//! can wire one pump per agent. The task terminates on stream end
+//! (`SessionEnded`, `SessionCrashed`) or when the returned `JoinHandle`
+//! is dropped.
 
 use std::sync::Arc;
 
@@ -20,9 +20,8 @@ use tokio::task::JoinHandle;
 use super::{RenderedBuffer, append_event};
 use crate::panels::agent_tree::AgentActivityUpdate;
 
-/// Slice 2: the pump signals a HITL request to the App by sending one of
-/// these. The App drains a dedicated mpsc receiver in its tick loop and
-/// opens the existing `Modal::HitlResponse`.
+/// HITL request sent from the pump to the App. The App drains a dedicated
+/// mpsc receiver in its tick loop and opens `Modal::HitlResponse`.
 #[derive(Debug, Clone)]
 pub struct HitlRequest {
     pub agent_id: AgentId,

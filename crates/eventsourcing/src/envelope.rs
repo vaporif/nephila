@@ -10,8 +10,8 @@ pub struct EventEnvelope {
     pub id: EventId,
     pub aggregate_type: String,
     pub aggregate_id: String,
-    /// CONTRACT (post slice-1b): callers MUST set this to `0` when constructing
-    /// fresh envelopes. The store stamps the actual sequence inside the writer
+    /// CONTRACT: callers must set this to `0` when constructing fresh
+    /// envelopes. The store stamps the actual sequence inside the writer
     /// thread, after computing
     /// `MAX(sequence) WHERE aggregate_type=? AND aggregate_id=?`.
     /// On reads, this is the assigned sequence.

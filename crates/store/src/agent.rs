@@ -256,7 +256,7 @@ impl AgentStore for SqliteStore {
 }
 
 impl SqliteStore {
-    /// Slice 4: returns agents whose state is in an "active phase" — i.e.
+    /// Returns agents whose state is in an "active phase" — i.e.
     /// `Starting`, `Active`, `Paused`, or `Suspending`. Used by
     /// `SessionRegistry::on_startup` to decide which agents to resume after
     /// an orchestrator restart.
@@ -433,9 +433,9 @@ mod tests {
         assert!(agents.is_empty());
     }
 
-    /// Slice 4 fix 1: `last_config_snapshot` survives an SQL round-trip
-    /// through `register` → `get`. Previously hardcoded to `None` in
-    /// `row_to_agent`, defeating the per-agent persistence intent.
+    /// `last_config_snapshot` survives an SQL round-trip through
+    /// `register` → `get`. Regression guard for an earlier hardcoded `None`
+    /// in `row_to_agent` that defeated per-agent persistence.
     #[tokio::test]
     async fn last_config_snapshot_round_trips_through_register_get() {
         let store = SqliteStore::open_in_memory(384).unwrap();

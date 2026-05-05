@@ -53,15 +53,15 @@ pub struct App {
     objective_tree: ObjectiveTreeState,
     agent_tree: AgentTreeState,
     event_log: EventLogState,
-    /// Slice 2: when `Some`, the embedded `SessionPane` is the focused panel
-    /// and the layout switches to the three-column variant.
+    /// When `Some`, the embedded `SessionPane` is the focused panel and the
+    /// layout switches to the three-column variant.
     session_focus: Option<AgentId>,
-    /// Slice 2: the embedded session panel. Slice 4 will swap this for a
-    /// per-agent pane index keyed by `AgentId`; for now there is at most one.
+    /// The embedded session panel. Today there is at most one; future work
+    /// may swap this for a per-agent pane index keyed by `AgentId`.
     session_pane: SessionPane,
-    /// Receiver drained before each render. Slice 2 owns the `Sender` half
-    /// (cloned to each pump task on `SessionStarted`). Slice 4's
-    /// `SessionRegistry` will move ownership of the sender there.
+    /// Receiver drained before each render. The App owns the `Sender` half
+    /// (cloned to each pump task on `SessionStarted`); the `SessionRegistry`
+    /// is expected to take ownership of the sender in a later iteration.
     activity_rx: mpsc::Receiver<AgentActivityUpdate>,
     activity_tx: mpsc::Sender<AgentActivityUpdate>,
     /// HITL request channel: pumps push when they observe a
@@ -466,7 +466,7 @@ impl App {
                 self.session_focus = None;
             }
             InputAction::ScrollUp(_) | InputAction::ScrollDown(_) => {
-                // Slice 2 leaves scroll a no-op; spec defers to slice 6.
+                // Scroll is a no-op for now; deferred per spec.
             }
         }
     }
@@ -835,10 +835,9 @@ impl App {
                     if item.data.hitl_pending {
                         self.try_open_hitl_modal(item.data.id);
                     } else if item.data.session_id.is_some() {
-                        // Slice 2: Enter focuses the embedded session pane.
-                        // The legacy TTY-handoff `attach_agent_session` moves
-                        // to hotkey `a` until the parity matrix closes
-                        // (slice 6/7).
+                        // Enter focuses the embedded session pane. The legacy
+                        // TTY-handoff `attach_agent_session` lives on hotkey
+                        // `a` until the parity matrix closes.
                         self.session_focus = Some(item.data.id);
                     } else {
                         self.event_log
@@ -1041,16 +1040,16 @@ impl App {
                 agent_id,
                 checkpoint_id,
             } => {
-                // Slice-1b step 18a: the MCP handler no longer emits
-                // CheckpointSaved; the connector reader emits
-                // SessionEvent::CheckpointReached instead. If we observe
-                // a legacy emission here, something is producing it that
-                // shouldn't be — log and surface to operator.
+                // The MCP handler no longer emits CheckpointSaved; the
+                // connector reader emits SessionEvent::CheckpointReached
+                // instead. A legacy emission reaching here means something
+                // is producing it that shouldn't be — log and surface to
+                // operator.
                 tracing::warn!(
                     target: "nephila_tui::bus",
                     %agent_id,
                     %checkpoint_id,
-                    "legacy CheckpointSaved bus event observed — should be unreachable after slice-1b",
+                    "legacy CheckpointSaved bus event observed — should be unreachable",
                 );
                 self.event_log
                     .push(format!("[{agent_id}] checkpoint saved: {checkpoint_id}"));

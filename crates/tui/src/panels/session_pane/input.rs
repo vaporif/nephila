@@ -5,7 +5,7 @@
 //! `ratatui = "0.29"`, which conflicts with the workspace's `ratatui = "0.30"`
 //! at the trait level (Widget impls hang off different `Buffer` types). The
 //! `tui-textarea-2 = "0.11"` fork resolves the version but is a non-canonical
-//! crate name; per Task 4 step 1's explicit fallback, we hand-roll the buffer.
+//! crate name, so we hand-roll the buffer instead.
 //!
 //! Keymap:
 //!   Normal: `i` → Input, `q` → ClosePane, `j`/`k` → scroll, Esc → ReturnToGlobal

@@ -9,10 +9,10 @@
 //!     delta arrives (reactive — `push_delta` checks the elapsed time), OR
 //!   - `finalize` is called for the `message_id`.
 //!
-//! `tick()` is provided for a future *proactive* periodic-flush hookup
-//! (slice 2 wires a `tokio::time::interval`); it is not yet called by the
-//! reader task in slice 1a, so a buffer with pending deltas but no further
-//! arrivals will sit until either `finalize` runs or the next delta lands.
+//! `tick()` is provided for a future proactive periodic-flush hookup (a
+//! `tokio::time::interval` driving the reader task). It is not yet called
+//! by the reader, so a buffer with pending deltas but no further arrivals
+//! will sit until either `finalize` runs or the next delta lands.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -64,9 +64,9 @@ impl Coalescer {
             .map(|mut buf| emit(&mut buf, message_id, true))
     }
 
-    // Periodic flush hook; not yet plumbed in slice 1a (slice 2 wires a
-    // 250ms ticker into the reader task). Kept public-crate so its unit
-    // test exercises the same surface.
+    // Periodic flush hook; not yet plumbed (the reader task currently
+    // relies on `push_delta` and `finalize` only). Kept public-crate so the
+    // unit test exercises the same surface.
     #[allow(dead_code)]
     pub(crate) fn tick(&mut self, now: Instant) -> Vec<SessionEvent> {
         let mut out = Vec::new();
@@ -91,8 +91,8 @@ fn emit(buf: &mut MessageBuffer, message_id: &str, is_final: bool) -> SessionEve
         seq_in_message: seq,
         delta_text: text,
         is_final,
-        // Slice 1b: payload truncation is observability-only; not implemented
-        // in the reader path. `metrics::SESSION_EVENT_PAYLOAD_TRUNCATED` will
+        // Payload truncation is observability-only and not implemented in
+        // the reader path. `metrics::SESSION_EVENT_PAYLOAD_TRUNCATED` will
         // count truncations once a downstream codepath introduces them.
         truncated: false,
         ts: Utc::now(),

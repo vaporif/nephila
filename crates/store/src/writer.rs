@@ -1,13 +1,13 @@
 //! Single-writer-thread for the SQLite database.
 //!
-//! Slice 1b refactor (ADR-0002): the writer now owns a typed command enum
-//! instead of accepting an arbitrary `FnOnce`. This lets the writer THREAD
-//! own the lazy `next_sequence` cache directly — keying off
+//! Per ADR-0002, the writer owns a typed command enum rather than accepting
+//! an arbitrary `FnOnce`. This lets the writer thread own the lazy
+//! `next_sequence` cache directly — keyed off
 //! `(aggregate_type, aggregate_id)` — so `append_batch` can stamp sequences
 //! inside the same SQLite transaction as the row INSERTs.
 //!
 //! Generic execution still works through `WriterCmd::Generic`, which the
-//! pre-1b stores (agent CRUD, checkpoint CRUD, etc.) continue to use via
+//! older stores (agent CRUD, checkpoint CRUD, etc.) continue to use via
 //! `WriterHandle::execute`.
 
 use crate::blob::PreparedBlob;

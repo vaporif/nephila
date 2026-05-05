@@ -1,6 +1,6 @@
 //! `ClaudeCodeSession` — owns one long-lived `claude` process per agent.
 //!
-//! Slice 1b: the connector is the sole producer of `SessionEvent`s for the
+//! The connector is the sole producer of `SessionEvent`s for the session
 //! aggregate. Events are persisted via `SqliteStore::append_batch` (or
 //! `append_batch_with_blobs` for oversized tool-result payloads) directly
 //! from the reader/writer tasks; the store stamps sequence per ADR-0002.
@@ -373,10 +373,11 @@ impl ClaudeCodeSession {
             ts: Utc::now(),
         };
         if matches!(mode, LaunchMode::ResumeFallback) {
-            // The `SessionStarted` variant has no metadata field per the slice-1b
-            // shape. We surface the fallback via a tracing span field so dashboards
-            // and audit logs can distinguish it; the `session.fallback_to_session_id`
-            // counter recorded in `Self::resume` is the operator-visible signal.
+            // The `SessionStarted` variant has no metadata field, so we
+            // surface the resume-fallback via a tracing span field where
+            // dashboards and audit logs can distinguish it. The
+            // `session.fallback_to_session_id` counter recorded in
+            // `Self::resume` is the operator-visible signal.
             tracing::info!(
                 session_id = %session_id,
                 agent_id = %agent_id,
@@ -463,9 +464,9 @@ impl ClaudeCodeSession {
     /// Graceful teardown: cancel tasks, close stdin, await drain, reap child.
     ///
     /// On clean shutdown, materializes the final `Session` state by replaying
-    /// from `store.load_events` and writes a snapshot at `last_seq` (Trigger A
-    /// per plan step 17). Snapshot save failures do NOT fail shutdown — the
-    /// store-side Trigger B will eventually catch up on the next subscribe.
+    /// from `store.load_events` and writes a snapshot at `last_seq`
+    /// (producer-side Trigger A). Snapshot save failures do NOT fail
+    /// shutdown — the store-side Trigger B catches up on the next subscribe.
     #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
     pub async fn shutdown(self) -> Result<(), ConnectorError> {
         // Order matters: `shutting_down` MUST be set before we cancel and
@@ -797,7 +798,7 @@ async fn process_frame(
         | ClaudeOutput::ControlResponse(_)
         | ClaudeOutput::Error(_)
         | ClaudeOutput::RateLimitEvent(_) => {
-            // Slice 1b records these in observability metrics only.
+            // Observability-only frames; no SessionEvents emitted.
         }
         ClaudeOutput::Assistant(asst) => {
             let message_id = asst.message.id.clone();
@@ -880,7 +881,7 @@ async fn process_frame(
                             }
                         }
                     }
-                    // thinking/image/server-tool blocks: not surfaced in slice 1b.
+                    // thinking/image/server-tool blocks: not currently surfaced.
                     _ => {}
                 }
             }

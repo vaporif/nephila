@@ -1,9 +1,9 @@
 //! `SessionPane` — embedded TUI panel for a single agent's session.
 //!
-//! Slice 1b: read-only consumer of `nephila_core::SessionEvent`. Slice 2 adds
-//! the input box (`input` submodule), the per-agent pump task that pushes
-//! events into the shared `RenderedRow` buffer, and the `bind_session` /
-//! `submit_text` plumbing for human prompts.
+//! Read-only consumer of `nephila_core::SessionEvent`, plus an input box
+//! (`input` submodule), a per-agent pump task that pushes events into the
+//! shared `RenderedRow` buffer, and `bind_session` / `submit_text`
+//! plumbing for human prompts.
 //!
 //! Glyphs follow spec `§SessionPane.Pane behavior`:
 //!   `YOU →` (HumanPromptQueued), `AGENT →` (AgentPromptQueued),
@@ -41,15 +41,16 @@ pub struct RenderedRow {
 }
 
 pub struct SessionPane {
-    /// Per-agent buffer fed by a pump task. Wrapped in `Arc<Mutex<_>>` so the
-    /// pump and the renderer can share it. Slice 4 hands the registry an
-    /// `Arc::clone` of this; slice 2 wires it manually in tests / demo.
+    /// Per-agent buffer fed by a pump task. Wrapped in `Arc<Mutex<_>>` so
+    /// the pump and the renderer can share it. The registry is expected to
+    /// hand the pane an `Arc::clone` of this once wired; tests / demo wire
+    /// it manually.
     pub buffer: RenderedBuffer,
     pub focused: bool,
     pub input: input::InputState,
-    /// Slice 2: the bound session (or `None` if no agent is focused). Holds
-    /// an `Arc` so the writer task (spawned per-submit) outlives the pane's
-    /// borrow window.
+    /// The bound session (or `None` if no agent is focused). Holds an `Arc`
+    /// so the writer task (spawned per-submit) outlives the pane's borrow
+    /// window.
     session: Option<Arc<ClaudeCodeSession>>,
     /// Marker kept on-screen while we wait for the assistant to acknowledge
     /// a HITL prompt. Drained by the App's tick loop after the modal closes.

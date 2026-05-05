@@ -4,7 +4,7 @@
 //!   - [`AppLayout::compute_with_focus`] — original 2-row layout used when
 //!     no agent's session is focused (objectives + agents on top, event log
 //!     below).
-//!   - [`AppLayoutWithSession::compute`] — slice 2's three-column variant:
+//!   - [`AppLayoutWithSession::compute`] — three-column variant:
 //!     agent_tree (20%) | session_pane (60%) | event_log (20%). Operators
 //!     keep cross-agent visibility while focused on a single session.
 

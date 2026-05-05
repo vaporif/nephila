@@ -5,9 +5,9 @@
 //! `ToolResult` event row, keeping the blob and the referencing event
 //! atomic. There is no standalone `BlobStore::put` for this reason.
 //!
-//! `BlobReader` is the read-only handle consumed by `SessionPane` and replay
-//! paths to fetch spilled payloads on demand. The default impl uses the
-//! read-only connection pool from step 7.
+//! `BlobReader` is the read-only handle consumed by `SessionPane` and
+//! replay paths to fetch spilled payloads on demand. The default impl uses
+//! the read-only connection pool.
 
 use crate::read_pool::ReadPool;
 use std::sync::Arc;

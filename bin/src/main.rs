@@ -74,9 +74,8 @@ async fn main() -> Result<()> {
         config.nephila.sqlite_path = db;
     }
 
-    // Slice 4 (Task 6 step 4): cross-process lockfile. Held for the lifetime
-    // of `main`; second nephila against the same workdir errors out with the
-    // lock acquisition failure surfaced in stderr.
+    // Cross-process lockfile. Held for the lifetime of `main`; a second
+    // nephila against the same workdir errors out at boot.
     let workdir = std::env::current_dir().wrap_err("read current dir for workdir lock")?;
     let _workdir_lock = nephila_store::lockfile::WorkdirLock::acquire(&workdir)
         .map_err(|e| color_eyre::eyre::eyre!("another nephila is already running here: {e}"))?;
@@ -171,10 +170,9 @@ async fn main() -> Result<()> {
         })
     };
 
-    // Slice 4: stand up the new session-event-driven supervisor alongside the
-    // legacy `BusEvent`-driven one. The registry now owns sessions, watches
-    // for crashes via `subscribe_after`, and respawns through
-    // `ClaudeCodeSession::resume`.
+    // Stand up the session-event-driven supervisor alongside the legacy
+    // `BusEvent`-driven one. The registry owns sessions, watches for crashes
+    // via `subscribe_after`, and respawns through `ClaudeCodeSession::resume`.
     let blob_reader = Arc::new(nephila_store::blob::SqliteBlobReader::new(
         sqlite_store.read_pool(),
     ));
@@ -210,13 +208,12 @@ async fn main() -> Result<()> {
             loop {
                 match new_agents_rx.recv().await {
                     Ok(agent_id) => {
-                        // DEFERRED to slice 4 (Task 6 step 5a): wire JoinSet +
-                        // run_per_session. The agent_id → session_id lookup
-                        // requires the AgentSessionAssigned event, which slice 4
-                        // introduces. For now the SessionSupervisor is parked —
-                        // the legacy LifecycleSupervisor handles all session
-                        // traffic until the slice-4 cutover.
-                        tracing::debug!(%agent_id, "SessionSupervisor wiring deferred to slice 4");
+                        // SessionSupervisor wiring is parked here: the
+                        // `JoinSet`/`run_per_session` plumbing depends on
+                        // production code paths that are not yet hooked up.
+                        // The legacy `LifecycleSupervisor` handles session
+                        // traffic in the meantime.
+                        tracing::debug!(%agent_id, "SessionSupervisor wiring parked");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(%n, "SessionRegistry lagged");

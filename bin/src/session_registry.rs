@@ -1,25 +1,23 @@
 //! `SessionRegistry` — owns one `ClaudeCodeSession` per agent and respawns it
 //! after a crash via `ClaudeCodeSession::resume`.
 //!
-//! Slice 4 (Task 6 step 3 + 5) builds on the slice-3 stub:
-//!   - `subscribe_session_started()` / `fire_started()` — preserved test seam
-//!     and supervisor bridge.
+//! Surface:
 //!   - `ensure_session(agent)` — start the session, append
 //!     `AgentSessionAssigned` to the agent aggregate, install the per-session
 //!     crash-watch task, fire `started_tx`.
 //!   - `on_crash(agent_id, crash_seq)` — guarded by a per-agent
-//!     `Mutex<RespawnState>`; drops the old handle and spawns a new one via
+//!     `Mutex<RespawnState>`; drops the old handle and resumes via
 //!     `ClaudeCodeSession::resume`.
 //!   - `on_startup()` — scans `list_agents_in_active_phase()` and resumes
 //!     each one. Failures transition the agent to `Failed`.
 //!
-//! Termination contract: the per-session crash-watch task MUST exit on either
-//! `SessionCrashed` or `SessionEnded`. Otherwise we leak one task per
-//! ever-spawned session.
+//! Termination contract: the per-session crash-watch task must exit on
+//! `SessionCrashed` or `SessionEnded`, or we leak one task per ever-spawned
+//! session.
 
-// Slice 4 introduces the registry surface; the orchestrator-driven `spawn`
-// path that calls `ensure_session` lands in slice 5/Task 7. Until then a
-// number of methods compile-but-aren't-yet-called from the production path.
+// The orchestrator-driven `spawn` path that calls `ensure_session` is wired in
+// from a separate plan; some methods compile but are not yet called from
+// production code paths.
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -47,7 +45,7 @@ const NEW_SESSION_CHANNEL_BOUND: usize = 64;
 const CRASH_FALLBACK_CHANNEL_BOUND: usize = 64;
 
 /// Defaults used by `cfg_from(agent)` when an agent predates the
-/// `AgentConfigSnapshotted` event (legacy installs upgrading to slice 4).
+/// `AgentConfigSnapshotted` event (legacy installs).
 #[derive(Debug, Clone)]
 pub struct RegistryDefaults {
     pub claude_binary: std::path::PathBuf,
@@ -145,8 +143,7 @@ impl SessionRegistry {
         }
     }
 
-    /// Subscribe to "a new session has started" notifications. Mirrors the
-    /// slice-3 stub API.
+    /// Subscribe to "a new session has started" notifications.
     pub fn subscribe_session_started(&self) -> broadcast::Receiver<AgentId> {
         self.started_tx.subscribe()
     }
@@ -458,9 +455,9 @@ impl SessionRegistry {
         Ok(())
     }
 
-    /// Slice 4 step 5: scan `list_agents_in_active_phase` and resume each
-    /// agent that has a known `session_id`. Failures transition the agent to
-    /// `Failed` via the agent reducer.
+    /// Scan `list_agents_in_active_phase` and resume each agent that has a
+    /// known `session_id`. Failures transition the agent to `Failed` via the
+    /// agent reducer.
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn on_startup(self: &Arc<Self>) -> Result<(), RegistryError> {
         let agents = self
@@ -651,9 +648,9 @@ mod tests {
         assert_eq!(reg.session_count(), 0);
     }
 
-    /// Slice 4 fix 2: `mark_agent_failed` writes through events — both the
-    /// agent event log AND the SQL projection reflect `Failed`. Verifies
-    /// `on_startup`'s failure branch is event-sourced.
+    /// `mark_agent_failed` writes through events: both the agent event log
+    /// and the SQL projection reflect `Failed`. Verifies `on_startup`'s
+    /// failure branch is event-sourced.
     #[tokio::test]
     async fn mark_agent_failed_appends_event_and_updates_projection() {
         use nephila_core::ObjectiveId;

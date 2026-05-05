@@ -1,8 +1,8 @@
 //! Default retention policy for terminated session aggregates.
 //!
-//! Slice 1b ships only the policy function; slice 4 wires the daily-sweep
-//! scheduler in `SessionRegistry`. The policy snapshots the final aggregate
-//! state, then prunes everything older than `last_seq - RETENTION_TAIL`.
+//! Ships the policy function; the daily-sweep scheduler that calls it lives
+//! in `SessionRegistry`. The policy snapshots the final aggregate state,
+//! then prunes everything older than `last_seq - RETENTION_TAIL`.
 
 use chrono::Utc;
 use nephila_eventsourcing::aggregate::EventSourced;

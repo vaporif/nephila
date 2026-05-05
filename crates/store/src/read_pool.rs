@@ -104,14 +104,12 @@ pub struct PooledConn {
 }
 
 impl PooledConn {
-    /// Borrow the underlying connection. Panics if the guard has already
-    /// been consumed by `into_inner` (it never has internally — this is
-    /// defensive against misuse).
+    /// Borrow the underlying connection.
     #[must_use]
     pub fn as_conn(&self) -> &Connection {
         self.conn
             .as_ref()
-            .expect("PooledConn used after into_inner")
+            .expect("PooledConn drop-consumed; this should not be reachable")
     }
 }
 
