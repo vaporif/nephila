@@ -675,11 +675,13 @@ mod tests {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Kill).unwrap();
         let agent = apply_all(agent, &events);
-        assert!(agent
-            .handle(AgentCommand::SetSession {
-                session_id: "s".into()
-            })
-            .is_err());
+        assert!(
+            agent
+                .handle(AgentCommand::SetSession {
+                    session_id: "s".into()
+                })
+                .is_err()
+        );
     }
 
     #[test]
