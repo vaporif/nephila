@@ -172,10 +172,9 @@ impl SessionRegistry {
         let me = Arc::clone(&self);
         Some(tokio::spawn(async move {
             while let Some(agent_id) = rx.recv().await {
-                // Crash arrived out-of-band — we don't know the sequence,
-                // so use 0 (idempotency check uses `Option::is_none()`
-                // semantics: the sequence is only meaningful when both sides
-                // observe the same number).
+                // Fallback path has no sequence number; pass 0 as a sentinel.
+                // `on_crash` recognises `crash_seq == 0` and falls back to a
+                // wall-clock dedup window instead of the per-sequence guard.
                 me.on_crash(agent_id, 0).await;
             }
         }))

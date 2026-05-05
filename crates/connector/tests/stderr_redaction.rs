@@ -13,6 +13,7 @@ fn redact_strips_bearer_token() {
     let s = "Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9";
     let r = redact_stderr(s);
     assert!(!r.contains("eyJ0eXAi"), "got: {r}");
+    assert!(r.contains("<redacted>"), "got: {r}");
 }
 
 #[test]
@@ -20,6 +21,7 @@ fn redact_strips_keyvalue_pair() {
     let s = "ANTHROPIC_API_KEY=sk-secret123 something else";
     let r = redact_stderr(s);
     assert!(!r.contains("sk-secret123"), "got: {r}");
+    assert!(r.contains("<redacted>"), "got: {r}");
 }
 
 #[test]
@@ -58,6 +60,7 @@ fn redact_handles_multiline_independently() {
     let r = redact_stderr(s);
     assert!(!r.contains("sk-ant-api03"), "got: {r}");
     assert!(!r.contains("eyJ0eXAi"), "got: {r}");
+    assert!(r.contains("<redacted>"), "got: {r}");
     assert!(
         r.contains("line 2: ok"),
         "innocuous lines must survive: {r}"

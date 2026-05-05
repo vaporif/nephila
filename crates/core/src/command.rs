@@ -60,7 +60,10 @@ impl std::fmt::Debug for OrchestratorCommand {
             } => f
                 .debug_struct("Spawn")
                 .field("objective_id", objective_id)
-                .field("content", &format_args!("<{} bytes>", content.len()))
+                .field(
+                    "content",
+                    &format_args!("<redacted: {} bytes>", content.len()),
+                )
                 .field("dir", dir)
                 .finish(),
             Self::SpawnAgent {
@@ -71,7 +74,10 @@ impl std::fmt::Debug for OrchestratorCommand {
             } => f
                 .debug_struct("SpawnAgent")
                 .field("objective_id", objective_id)
-                .field("content", &format_args!("<{} bytes>", content.len()))
+                .field(
+                    "content",
+                    &format_args!("<redacted: {} bytes>", content.len()),
+                )
                 .field("dir", dir)
                 .field("spawned_by", spawned_by)
                 .finish(),
@@ -90,7 +96,10 @@ impl std::fmt::Debug for OrchestratorCommand {
             Self::HitlRespond { agent_id, response } => f
                 .debug_struct("HitlRespond")
                 .field("agent_id", agent_id)
-                .field("response", &format_args!("<{} bytes>", response.len()))
+                .field(
+                    "response",
+                    &format_args!("<redacted: {} bytes>", response.len()),
+                )
                 .finish(),
             Self::TokenThreshold {
                 agent_id,
@@ -113,7 +122,10 @@ impl std::fmt::Debug for OrchestratorCommand {
             } => f
                 .debug_struct("Respawn")
                 .field("objective_id", objective_id)
-                .field("content", &format_args!("<{} bytes>", content.len()))
+                .field(
+                    "content",
+                    &format_args!("<redacted: {} bytes>", content.len()),
+                )
                 .field("dir", dir)
                 .field("restore_checkpoint_id", restore_checkpoint_id)
                 .finish(),
