@@ -433,6 +433,24 @@ impl SqliteStore {
             .await
             .expect("raw_seed_for_test");
     }
+
+    /// Test seam: invoke `run_session_snapshot_task` directly so concurrency
+    /// tests can race appends against the snapshot replay without going
+    /// through `subscribe_after`'s spawn path.
+    ///
+    /// Gated behind `cfg(any(test, feature = "test-seam"))` so it is absent
+    /// from release builds. Integration tests under `tests/` enable the
+    /// feature via the self-referencing dev-dependency in
+    /// `crates/store/Cargo.toml`.
+    #[cfg(any(test, feature = "test-seam"))]
+    #[doc(hidden)]
+    pub async fn run_session_snapshot_task_for_test(
+        &self,
+        agg_id: &str,
+        head: u64,
+    ) -> Result<(), EventStoreError> {
+        run_session_snapshot_task(self, "session", agg_id, head).await
+    }
 }
 
 struct SnapshotLockGuard {
@@ -468,7 +486,9 @@ async fn run_session_snapshot_task(
     } else {
         Session::default_state()
     };
-    let events = store.load_events(agg_type, agg_id, last_snap_seq).await?;
+    let events = store
+        .load_events_from_pool(agg_type, agg_id, last_snap_seq, head)
+        .await?;
     let mut last_seq = last_snap_seq;
     for env in &events {
         state = state

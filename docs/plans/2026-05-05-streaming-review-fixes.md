@@ -1249,7 +1249,7 @@ git commit -m "fix(store): apply mmap/cache/temp-store/checkpoint pragmas (H-P3)
 
 **Important:** `load_events_from_pool` takes FOUR arguments — `(agg_type, agg_id, since_exclusive, head_inclusive)` — not three. The `head` parameter already in scope inside `run_session_snapshot_task` is the right value for `head_inclusive`. The plan's earlier "one-line swap" was wrong; the substitution adds a fourth argument.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `crates/store/tests/snapshot_does_not_block_writer.rs`. Use the real `EventEnvelope` shape (`event_type` not `kind`, `timestamp` not `ts`, `id: EventId::new()`, `metadata: HashMap`-shaped via `Default::default()`, plus `trace_id`, `outcome`, `context_snapshot` fields). `SqliteStore::open` takes `&Path` — pass `&tmp.path().join("db.sqlite")` so the borrow checker doesn't complain.
 
@@ -1330,12 +1330,12 @@ impl SqliteStore {
 
 (Use `#[cfg(test)]` to match the rest of the crate's test-seam style. If a non-test consumer needs this, switch to a feature flag — out of scope for this task.)
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p nephila-store --test snapshot_does_not_block_writer -- --nocapture`
 Expected: FAIL — append latency over the 50ms threshold.
 
-- [ ] **Step 3: Swap `load_events` for `load_events_from_pool` (with the head argument)**
+- [x] **Step 3: Swap `load_events` for `load_events_from_pool` (with the head argument)**
 
 In `run_session_snapshot_task`, replace:
 
@@ -1353,19 +1353,19 @@ let events = store
 
 Confirm the signature (currently `load_events_from_pool(&self, agg_type: &str, agg_id: &str, since_exclusive: u64, head_inclusive: u64) -> Result<Vec<EventEnvelope>, EventStoreError>`). The `head` value comes from the function's existing `head: u64` parameter (line 453). The semantic match is `since_exclusive = last_snap_seq`, `head_inclusive = head`.
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `cargo test -p nephila-store --test snapshot_does_not_block_writer -- --nocapture`
 Expected: PASS — append latency under threshold.
 
 (If the test still fails marginally, check whether `load_latest_snapshot` at line 460 is the remaining culprit. Task 10 fixes that; you can ALSO inline a temporary pool-based version of `load_latest_snapshot` here, but that's redundant once Task 10 lands. Prefer to commit Task 9 even if it only partially closes the gap, then complete the picture in Task 10.)
 
-- [ ] **Step 5: Run the full store suite**
+- [x] **Step 5: Run the full store suite**
 
 Run: `cargo test -p nephila-store -- --nocapture`
 Expected: PASS — especially the snapshot-trigger and `subscribe_after_ordering` tests.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git add crates/store/src/domain_event.rs crates/store/tests/snapshot_does_not_block_writer.rs
