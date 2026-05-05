@@ -86,10 +86,10 @@ struct RespawnState {
     /// Concurrent callers that observe `true` skip — the in-flight respawn
     /// will install the new handle.
     respawn_in_flight: bool,
-    /// Wall-clock instant at which the last respawn decision was committed.
-    /// Used to dedupe `crash_seq == 0` (fallback) replays within
-    /// `FALLBACK_DEDUP_WINDOW`.
-    last_respawn_at: Option<std::time::Instant>,
+    /// Wall-clock instant at which the last respawn attempt was committed
+    /// (success or failure). Used to dedupe `crash_seq == 0` (fallback)
+    /// replays within `FALLBACK_DEDUP_WINDOW`.
+    last_respawn_attempt_at: Option<std::time::Instant>,
     #[cfg(test)]
     respawn_count: u64,
 }
@@ -356,48 +356,47 @@ impl SessionRegistry {
             .clone();
 
         // Phase 1: dedup decision — atomic with setting `respawn_in_flight`.
+        let mut state = lock.lock().await;
+        if state.respawn_in_flight {
+            tracing::debug!(%agent_id, crash_seq, "respawn already in flight; skipping");
+            return;
+        }
+        if crash_seq != 0
+            && let Some(prev) = state.last_handled_crash_seq
+            && crash_seq <= prev
         {
-            let mut state = lock.lock().await;
-            if state.respawn_in_flight {
-                tracing::debug!(%agent_id, crash_seq, "respawn already in flight; skipping");
-                return;
-            }
-            if crash_seq != 0
-                && let Some(prev) = state.last_handled_crash_seq
-                && crash_seq <= prev
-            {
-                tracing::debug!(%agent_id, crash_seq, prev, "duplicate crash sequence; skipping");
-                return;
-            }
-            if crash_seq == 0
-                && let Some(last) = state.last_respawn_at
-                && last.elapsed() < FALLBACK_DEDUP_WINDOW
-            {
-                tracing::debug!(
-                    %agent_id,
-                    last_respawn_ago_ms = last.elapsed().as_millis() as u64,
-                    "fallback within dedup window; skipping",
-                );
-                return;
-            }
-            state.respawn_in_flight = true;
-            #[cfg(test)]
-            {
-                state.respawn_count += 1;
-            }
-        } // drop(state) — lock released before any awaits below.
+            tracing::debug!(%agent_id, crash_seq, prev, "duplicate crash sequence; skipping");
+            return;
+        }
+        if crash_seq == 0
+            && let Some(last) = state.last_respawn_attempt_at
+            && last.elapsed() < FALLBACK_DEDUP_WINDOW
+        {
+            tracing::debug!(
+                %agent_id,
+                last_respawn_ago_ms = last.elapsed().as_millis() as u64,
+                "fallback within dedup window; skipping",
+            );
+            return;
+        }
+        state.respawn_in_flight = true;
+        #[cfg(test)]
+        {
+            state.respawn_count += 1;
+        }
+        drop(state);
 
         // Phase 2: do the work without holding the lock.
         let result = self.do_respawn_work(agent_id).await;
 
         // Phase 3: commit + clear in-flight, regardless of result.
-        // `last_respawn_at` is set on every attempt — the fallback dedup
-        // window also gates failed attempts so a flapping respawn doesn't
-        // spin. `last_handled_crash_seq` only advances on success, so a
-        // failed store-path respawn can be retried at the next sequence.
+        // `last_respawn_attempt_at` is set on every attempt — the fallback
+        // dedup window also gates failed attempts so a flapping respawn
+        // doesn't spin. `last_handled_crash_seq` only advances on success,
+        // so a failed store-path respawn can be retried at the next sequence.
         let mut state = lock.lock().await;
         state.respawn_in_flight = false;
-        state.last_respawn_at = Some(std::time::Instant::now());
+        state.last_respawn_attempt_at = Some(std::time::Instant::now());
         match result {
             Ok(()) => {
                 state.last_handled_crash_seq = Some(crash_seq);
@@ -591,7 +590,7 @@ impl SessionRegistry {
     /// Test seam: pre-create the per-agent `RespawnState` entry so that
     /// concurrent `on_crash` callers race the same mutex.
     #[cfg(test)]
-    pub async fn install_respawn_counter_for_test(self: &Arc<Self>, agent_id: AgentId) {
+    pub async fn materialize_respawn_state_for_test(self: &Arc<Self>, agent_id: AgentId) {
         let _ = self
             .respawn_states
             .entry(agent_id)

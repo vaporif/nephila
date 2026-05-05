@@ -358,7 +358,7 @@ async fn double_fallback_only_respawns_once() {
     let session_id = Uuid::new_v4();
     registry.bind_session_id_for_test(agent_id, session_id);
     // Materialise the respawn_states entry so both callers race the SAME mutex.
-    registry.install_respawn_counter_for_test(agent_id).await;
+    registry.materialize_respawn_state_for_test(agent_id).await;
 
     // Fire fallback twice. tokio::join polls them in order; with the lock
     // released across resume(), the second call observes in_flight=true.
