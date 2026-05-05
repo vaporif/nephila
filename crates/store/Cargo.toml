@@ -40,6 +40,7 @@ nix = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 criterion = { workspace = true }
+tempfile = { workspace = true }
 # Self-reference so integration tests under `tests/` see the test-seam items.
 # `cargo test --workspace` enables this transparently.
 nephila-store = { path = ".", features = ["test-seam"] }

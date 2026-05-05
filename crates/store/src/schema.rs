@@ -194,6 +194,19 @@ pub fn init_vec_tables(conn: &Connection, dimension: usize) -> Result<(), rusqli
     Ok(())
 }
 
+/// Apply per-connection tuning pragmas. Safe to call on file-backed and
+/// in-memory connections; mmap/wal pragmas are no-ops on `:memory:`.
+pub(crate) fn apply_tuning_pragmas(conn: &Connection) -> Result<(), rusqlite::Error> {
+    // 256MB mmap covers the multi-GB event log working set without syscalls.
+    conn.pragma_update(None, "mmap_size", 268_435_456_i64)?;
+    // Negative cache_size = KiB; -65536 = 64MB page cache for backfill scans.
+    conn.pragma_update(None, "cache_size", -65_536_i64)?;
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
+    conn.pragma_update(None, "wal_autocheckpoint", 1000_i64)?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

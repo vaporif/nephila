@@ -1228,7 +1228,7 @@ Expected: PASS.
 Run: `cargo check -p nephila-store && cargo clippy -p nephila-store -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```
 git add crates/store/src/lib.rs crates/store/src/writer.rs crates/store/src/read_pool.rs crates/store/tests/pragma_settings.rs

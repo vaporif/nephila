@@ -83,6 +83,7 @@ impl SqliteStore {
         let conn = rusqlite::Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        schema::apply_tuning_pragmas(&conn)?;
         schema::init_db(&conn)?;
         schema::init_vec_tables(&conn, embedding_dim)?;
         let writer = WriterHandle::new(conn);

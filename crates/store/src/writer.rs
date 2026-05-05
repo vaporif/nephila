@@ -60,9 +60,9 @@ impl WriterHandle {
         conn: Connection,
         broadcasts: Arc<BroadcastRegistry>,
     ) -> Self {
-        // PRAGMA synchronous = NORMAL on the writer connection only.
-        // journal_mode=WAL is set in SqliteStore::open. For in-memory it's a no-op.
-        let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+        // mmap/cache/temp_store/wal_autocheckpoint/synchronous. mmap and WAL
+        // pragmas are no-ops on in-memory; safe to apply universally.
+        let _ = crate::schema::apply_tuning_pragmas(&conn);
         let (tx, rx) = mpsc::channel::<WriterCmd>();
         let bcasts = broadcasts.clone();
         std::thread::spawn(move || writer_loop(conn, rx, bcasts));
