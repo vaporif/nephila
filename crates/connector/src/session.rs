@@ -833,15 +833,21 @@ async fn process_frame(
                         let raw =
                             serde_json::to_value(&r.content).unwrap_or(serde_json::Value::Null);
                         let is_error = r.is_error.unwrap_or(false);
-                        let prepared =
-                            build_tool_result_event(&r.tool_use_id, &raw, is_error, &mut events);
+                        let (_name, prepared) = build_tool_result_event(
+                            tool_names,
+                            &r.tool_use_id,
+                            &raw,
+                            is_error,
+                            &mut events,
+                        );
                         if let Some(p) = prepared {
                             blobs.push(p);
                         }
                     }
                     ContentBlock::McpToolResult(r) => {
                         let is_error = r.is_error.unwrap_or(false);
-                        let prepared = build_tool_result_event(
+                        let (name, prepared) = build_tool_result_event(
+                            tool_names,
                             &r.tool_use_id,
                             &r.content,
                             is_error,
@@ -850,12 +856,10 @@ async fn process_frame(
                         if let Some(p) = prepared {
                             blobs.push(p);
                         }
-                        // Look up the tool name to decide whether this is a
-                        // checkpoint round-trip. Only a successful result
-                        // counts as `CheckpointReached`; an error is treated
-                        // as a regular tool result.
+                        // Only a successful result counts as `CheckpointReached`;
+                        // an error is treated as a regular tool result.
                         if !is_error
-                            && let Some(name) = lookup_tool_name(tool_names, &r.tool_use_id)
+                            && let Some(name) = name
                             && matches!(
                                 name.as_str(),
                                 "serialize_and_persist" | "request_human_input"
@@ -937,13 +941,18 @@ fn lookup_tool_name(tool_names: &ToolNames, tool_use_id: &str) -> Option<String>
 }
 
 /// Builds a `ToolResult` event (inline or spilled per `TOOL_RESULT_INLINE_MAX`)
-/// and appends it to `events`. Returns the `PreparedBlob` if spillover occurred.
+/// and appends it to `events`. Drains the `tool_names` entry for `tool_use_id`
+/// regardless of arm so plain (Read/Edit/Bash/...) and MCP results both
+/// release their map slot exactly once. Returns the resolved tool name (if
+/// previously recorded) and the `PreparedBlob` when spillover occurred.
 fn build_tool_result_event(
+    tool_names: &ToolNames,
     tool_use_id: &str,
     raw_output: &serde_json::Value,
     is_error: bool,
     events: &mut Vec<SessionEvent>,
-) -> Option<PreparedBlob> {
+) -> (Option<String>, Option<PreparedBlob>) {
+    let name = lookup_tool_name(tool_names, tool_use_id);
     let bytes = match serde_json::to_vec(raw_output) {
         Ok(b) => b,
         Err(e) => {
@@ -954,7 +963,7 @@ fn build_tool_result_event(
                 is_error,
                 ts: Utc::now(),
             });
-            return None;
+            return (name, None);
         }
     };
     if bytes.len() <= TOOL_RESULT_INLINE_MAX {
@@ -964,7 +973,7 @@ fn build_tool_result_event(
             is_error,
             ts: Utc::now(),
         });
-        return None;
+        return (name, None);
     }
     let prepared = prepare_blob(&bytes);
     events.push(SessionEvent::ToolResult {
@@ -977,7 +986,7 @@ fn build_tool_result_event(
         is_error,
         ts: Utc::now(),
     });
-    Some(prepared)
+    (name, Some(prepared))
 }
 
 /// Extracts `checkpoint_id` from an MCP tool-result content payload and
@@ -1285,4 +1294,44 @@ async fn save_terminal_snapshot(
         timestamp: Utc::now(),
     };
     store.save_snapshot(&snap).await
+}
+
+#[cfg(test)]
+mod tool_names_cleanup_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    fn fresh_tool_names() -> ToolNames {
+        Arc::new(Mutex::new(HashMap::new()))
+    }
+
+    #[test]
+    fn plain_tool_result_drains_tool_names_entry() {
+        let names = fresh_tool_names();
+        record_tool_use(&names, "tool-1", "Read");
+        assert_eq!(names.lock().unwrap().len(), 1);
+
+        let raw = serde_json::Value::String("ok".into());
+        let mut events: Vec<SessionEvent> = Vec::new();
+        let _prepared = build_tool_result_event(&names, "tool-1", &raw, false, &mut events);
+
+        assert_eq!(
+            names.lock().unwrap().len(),
+            0,
+            "ToolResult handling must drain the tool_names entry",
+        );
+    }
+
+    #[test]
+    fn mcp_tool_result_drains_tool_names_entry() {
+        let names = fresh_tool_names();
+        record_tool_use(&names, "tool-2", "serialize_and_persist");
+
+        let raw = serde_json::Value::Object(serde_json::Map::new());
+        let mut events: Vec<SessionEvent> = Vec::new();
+        let _prepared = build_tool_result_event(&names, "tool-2", &raw, false, &mut events);
+
+        assert_eq!(names.lock().unwrap().len(), 0);
+    }
 }

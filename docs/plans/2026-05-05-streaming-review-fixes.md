@@ -999,7 +999,7 @@ git commit -m "fix(security): redact stderr tail in SessionCrashed.reason (H-S4)
 
 **Test design:** `tool_names: ToolNames` is created locally inside the reader-task spawn (around `session.rs:359`); it is NOT a field on `ClaudeCodeSession`. Adding a `&self` test seam would require restructuring the type. Instead, write an in-crate unit test directly on the cleanup behavior of the helpers and/or the result-handling path. Tests in `#[cfg(test)] mod tests { ... }` inside `session.rs` can call module-private items directly without any `pub` change.
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 Append (or extend the existing) `#[cfg(test)] mod tests { ... }` inside `crates/connector/src/session.rs`:
 
@@ -1048,12 +1048,12 @@ mod tool_names_cleanup_tests {
 
 The signature of `build_tool_result_event` shown matches the current source (it already takes `&ToolNames` after the refactor — see Step 3); read the current signature at session.rs:922 first to confirm the parameter list before writing the call sites in the test.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p nephila-connector tool_names_cleanup_tests -- --nocapture`
 Expected: FAIL — `assertion failed: len == 0` for the plain ToolResult path. (If `build_tool_result_event` does not yet take `&ToolNames`, the test won't compile until Step 3 adds the parameter.)
 
-- [ ] **Step 3: Push `lookup_tool_name` into `build_tool_result_event`**
+- [x] **Step 3: Push `lookup_tool_name` into `build_tool_result_event`**
 
 In `crates/connector/src/session.rs`:
 - Add `tool_names: &ToolNames` as the first parameter of `fn build_tool_result_event(...)`. Inside the function, call `let name = lookup_tool_name(tool_names, tool_use_id);` exactly once (this drains the entry for both arms).
@@ -1099,22 +1099,22 @@ ContentBlock::ToolResult(r) => {
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [x] **Step 4: Run the test**
 
 Run: `cargo test -p nephila-connector tool_names_cleanup_tests -- --nocapture`
 Expected: PASS.
 
-- [ ] **Step 5: Run the full connector suite**
+- [x] **Step 5: Run the full connector suite**
 
 Run: `cargo test -p nephila-connector -- --nocapture`
 Expected: PASS — including `session_smoke`, which exercises the MCP arm's checkpoint-dispatch behavior end-to-end.
 
-- [ ] **Step 6: Run cargo check + clippy**
+- [x] **Step 6: Run cargo check + clippy**
 
 Run: `cargo check -p nephila-connector && cargo clippy -p nephila-connector -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```
 git add crates/connector/src/session.rs
