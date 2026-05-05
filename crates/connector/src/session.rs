@@ -650,6 +650,11 @@ async fn stderr_drain_task(stderr: tokio::process::ChildStderr, ring: StderrRing
     }
 }
 
+// `(?i)` is intentional and applies to all alternations: it folds case for
+// the keyword group (`api_key`, `secret`, ...) and harmlessly over-matches
+// case-variants of `sk-`, `ghp_`, and `Bearer`. Real credentials of those
+// schemes are case-sensitive and lowercase, so case-folding only redacts
+// non-credential strings that happen to match — the safe direction.
 static REDACTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
     regex::Regex::new(
         r"(?i)(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|(api[_-]?key|secret|token|password)[=:]\s*\S+)",

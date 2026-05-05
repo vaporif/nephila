@@ -43,3 +43,36 @@ fn redact_keeps_long_hashes() {
         "should keep long hashes; got: {r}"
     );
 }
+
+#[test]
+fn redact_strips_github_pat() {
+    let s = "auth failed: ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+    let r = redact_stderr(s);
+    assert!(!r.contains("ghp_abcdefghijklmnopqrstuvwxyz"), "got: {r}");
+    assert!(r.contains("<redacted>"), "got: {r}");
+}
+
+#[test]
+fn redact_handles_multiline_independently() {
+    let s = "line 1: sk-ant-api03-1234567890abcdef1234567890abcdef\nline 2: ok\nline 3: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9";
+    let r = redact_stderr(s);
+    assert!(!r.contains("sk-ant-api03"), "got: {r}");
+    assert!(!r.contains("eyJ0eXAi"), "got: {r}");
+    assert!(
+        r.contains("line 2: ok"),
+        "innocuous lines must survive: {r}"
+    );
+}
+
+#[test]
+fn redact_handles_empty() {
+    assert_eq!(redact_stderr(""), "");
+}
+
+#[test]
+fn redact_keeps_short_sk_prefix() {
+    // `{20,}` quantifier — short prefix must not match.
+    let s = "sk-shortenough";
+    let r = redact_stderr(s);
+    assert_eq!(r, s, "short sk- prefix should not redact: {r}");
+}
