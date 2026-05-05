@@ -410,10 +410,7 @@ impl SessionRegistry {
     /// Inner respawn work — drop the old handle, resume, install the new
     /// handle. Holds NO `RespawnState` lock; the caller manages the
     /// in-flight flag.
-    async fn do_respawn_work(
-        self: &Arc<Self>,
-        agent_id: AgentId,
-    ) -> Result<(), RegistryError> {
+    async fn do_respawn_work(self: &Arc<Self>, agent_id: AgentId) -> Result<(), RegistryError> {
         if let Some((_id, old)) = self.sessions.remove(&agent_id) {
             old.pump.abort();
             drop(old.session);

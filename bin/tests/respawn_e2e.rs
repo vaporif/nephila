@@ -367,13 +367,19 @@ async fn double_fallback_only_respawns_once() {
     tokio::join!(r1.on_crash(agent_id, 0), r2.on_crash(agent_id, 0));
 
     let count = registry.respawn_count_for_test(agent_id).await;
-    assert_eq!(count, 1, "expected exactly one respawn decision; got {count}");
+    assert_eq!(
+        count, 1,
+        "expected exactly one respawn decision; got {count}"
+    );
 
     // Sanity check — a second call after the first completes within the
     // dedup window must also be skipped.
     registry.on_crash(agent_id, 0).await;
     let count = registry.respawn_count_for_test(agent_id).await;
-    assert_eq!(count, 1, "fallback within dedup window must skip; got {count}");
+    assert_eq!(
+        count, 1,
+        "fallback within dedup window must skip; got {count}"
+    );
 }
 
 #[tokio::test]
