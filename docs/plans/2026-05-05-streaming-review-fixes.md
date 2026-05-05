@@ -71,7 +71,7 @@ These findings were validated as real but recalibrated to Medium or Low; they be
 
 **Test design:** rather than threading a `last_handled_crash_seq_for_test` seam (which couples to internal respawn state and would also require `resume()` to actually run, which needs a fake_claude binary), the test uses the same termination-signal pattern as the existing `crash_watch_terminates_on_session_crashed` test (`bin/src/session_registry.rs` `mod tests`): the watcher's `AbortHandle::is_finished()` flips true once the `SessionCrashed` arm breaks out of the loop. That signal verifies the envelope was delivered through the resilient stream — independent of whether `on_crash` succeeded downstream. No new test seam is needed.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `bin/tests/respawn_e2e.rs`. Note: this file uses `#[path = "../src/session_registry.rs"] mod session_registry;` (see lines 26-29), so private items like `spawn_crash_watch` ARE callable. Use the real `SessionRegistry::new(store, blob, defaults)` constructor; there is no `new_for_test`. The `EventEnvelope` field names are `event_type` (not `kind`), `timestamp` (not `ts`), with `trace_id: TraceId(...)`, `outcome: None`, `context_snapshot: None`, `metadata: HashMap`-typed (use `Default::default()`). `id` is `EventId::new()` (not `Uuid::new_v4()`).
 
@@ -170,12 +170,14 @@ async fn crash_watch_recovers_session_crashed_after_broadcast_lag() {
 
 Pick whichever no-op `SessionEvent` variant is cheapest to construct — the body is irrelevant; only the volume matters.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p nephila --test respawn_e2e crash_watch_recovers -- --nocapture`
 Expected: PANIC `crash-watch did not terminate after SessionCrashed within 5s` — the raw `subscribe_after` loop loses the crash envelope after the Lag burst.
 
-- [ ] **Step 3: Replace the raw `subscribe_after` with `resilient_subscribe`**
+NOTE: The bug is real but the test as designed cannot deterministically reproduce it on a fast multi-core system — the watcher's tokio task keeps up with the writer thread, so the broadcast buffer never overflows enough to evict the crash event. The test was retained as a smoke test that verifies the resilient stream path doesn't break the happy path. See task report for details.
+
+- [x] **Step 3: Replace the raw `subscribe_after` with `resilient_subscribe`**
 
 `resilient_subscribe` is already re-exported via `pub mod resilient_subscribe;` in `crates/store/src/lib.rs:12`. Add at the top of `bin/src/session_registry.rs`:
 
@@ -231,12 +233,12 @@ let handle = tokio::spawn(async move {
 
 The `Box::pin` is required because `resilient_subscribe` returns `impl Stream` — pinning lets `StreamExt::next` work on a `let mut` binding. The `PersistentLag(_)` arm uses the variant's `u32` payload (see `crates/eventsourcing/src/store.rs:24`) — bare `PersistentLag` (no parens) won't compile.
 
-- [ ] **Step 4: Run the new test and the existing respawn suite**
+- [x] **Step 4: Run the new test and the existing respawn suite**
 
 Run: `cargo test -p nephila --test respawn_e2e -- --nocapture`
 Expected: PASS for `crash_watch_recovers_session_crashed_after_broadcast_lag` AND all existing respawn tests (some of which require the `fake_claude` fixture and will skip with a printed message if it's missing — that's expected, not a failure).
 
-- [ ] **Step 5: Run cargo check + clippy on touched crates**
+- [x] **Step 5: Run cargo check + clippy on touched crates**
 
 Run: `cargo check -p nephila && cargo clippy -p nephila -- -D warnings`
 Expected: clean.

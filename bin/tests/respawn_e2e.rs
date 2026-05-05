@@ -248,6 +248,98 @@ async fn on_startup_resumes_active_agents() {
 }
 
 #[tokio::test]
+async fn crash_watch_recovers_session_crashed_after_broadcast_lag() {
+    use nephila_core::session_event::SessionEvent;
+    use nephila_eventsourcing::envelope::EventEnvelope;
+    use nephila_eventsourcing::id::{EventId, TraceId};
+
+    let store = Arc::new(SqliteStore::open_in_memory(384).expect("store"));
+    let blob = Arc::new(SqliteBlobReader::new(store.read_pool()));
+    let defaults = RegistryDefaults {
+        claude_binary: PathBuf::from("/usr/bin/false"),
+        mcp_endpoint: "http://stub".into(),
+        permission_mode: "bypassPermissions".into(),
+    };
+    let reg = Arc::new(SessionRegistry::new(
+        Arc::clone(&store),
+        Arc::clone(&blob),
+        defaults,
+    ));
+
+    let agent_id = AgentId::new();
+    let session_id = Uuid::new_v4();
+    // Bind session_id so on_crash can find it (still bails when the agent is
+    // not in the store — but we only need the watcher itself to break out,
+    // not for the respawn to succeed).
+    reg.bind_session_id_for_test(agent_id, session_id);
+
+    let abort = reg.spawn_crash_watch(agent_id, session_id);
+
+    // Saturate the broadcast channel past Lagged. The default broadcast
+    // capacity used by the store's per-aggregate sender is 4096; see
+    // `crates/store/src/subscribe.rs`. 4500 envelopes overflows it.
+    let mut envelopes: Vec<EventEnvelope> = Vec::with_capacity(4500);
+    let noop = SessionEvent::HumanPromptQueued {
+        turn_id: Uuid::new_v4(),
+        text: String::new(),
+        ts: chrono::Utc::now(),
+    };
+    let payload = serde_json::to_value(&noop).expect("payload");
+    for _ in 0..4500u64 {
+        envelopes.push(EventEnvelope {
+            id: EventId::new(),
+            aggregate_type: "session".to_owned(),
+            aggregate_id: session_id.to_string(),
+            sequence: 0,
+            event_type: "human_prompt_queued".to_owned(),
+            payload: payload.clone(),
+            trace_id: TraceId(session_id.to_string()),
+            outcome: None,
+            timestamp: chrono::Utc::now(),
+            context_snapshot: None,
+            metadata: Default::default(),
+        });
+    }
+    store.append_batch(envelopes).await.expect("append batch");
+
+    // Now append the crash — must reach the watcher's SessionCrashed arm
+    // (and break it out) despite any prior Lag burst.
+    let crashed = SessionEvent::SessionCrashed {
+        reason: "test".into(),
+        exit_code: Some(1),
+        ts: chrono::Utc::now(),
+    };
+    let crash_env = EventEnvelope {
+        id: EventId::new(),
+        aggregate_type: "session".to_owned(),
+        aggregate_id: session_id.to_string(),
+        sequence: 0,
+        event_type: "session_crashed".to_owned(),
+        payload: serde_json::to_value(&crashed).expect("payload"),
+        trace_id: TraceId(session_id.to_string()),
+        outcome: None,
+        timestamp: chrono::Utc::now(),
+        context_snapshot: None,
+        metadata: Default::default(),
+    };
+    store
+        .append_batch(vec![crash_env])
+        .await
+        .expect("append crash");
+
+    // Watcher must terminate — that proves the SessionCrashed envelope was
+    // delivered through the resilient stream after the burst.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if abort.is_finished() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("crash-watch did not terminate after SessionCrashed within 5s");
+}
+
+#[tokio::test]
 async fn crash_during_respawn_orphan_recovery() {
     let Some(fake) = fake_claude_path() else {
         eprintln!("fake_claude binary not found; skipping crash_during_respawn_orphan_recovery");

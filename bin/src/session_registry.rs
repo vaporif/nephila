@@ -39,6 +39,7 @@ use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
 use nephila_store::blob::SqliteBlobReader;
+use nephila_store::resilient_subscribe::resilient_subscribe;
 use tokio::sync::{Mutex, broadcast, mpsc};
 use uuid::Uuid;
 
@@ -271,7 +272,7 @@ impl SessionRegistry {
     /// Per-session crash-watch task. Subscribes to the session aggregate from
     /// sequence 0, breaks on `SessionCrashed` (calling `on_crash`) or
     /// `SessionEnded` (removing the entry).
-    fn spawn_crash_watch(
+    pub(crate) fn spawn_crash_watch(
         self: &Arc<Self>,
         agent_id: AgentId,
         session_id: Uuid,
@@ -279,17 +280,23 @@ impl SessionRegistry {
         let me = Arc::clone(self);
         let agg_id = session_id.to_string();
         let handle = tokio::spawn(async move {
-            let mut stream = match me.store.subscribe_after("session", &agg_id, 0).await {
-                Ok(s) => s,
-                Err(e) => {
-                    tracing::error!(%agent_id, %session_id, %e, "subscribe_after failed in crash-watch");
-                    return;
-                }
-            };
+            let mut stream = Box::pin(resilient_subscribe(
+                Arc::clone(&me.store),
+                "session".to_owned(),
+                agg_id,
+                0,
+            ));
 
             while let Some(item) = stream.next().await {
                 let env = match item {
                     Ok(e) => e,
+                    Err(nephila_eventsourcing::store::EventStoreError::PersistentLag(n)) => {
+                        tracing::error!(
+                            %agent_id, %session_id, retries = n,
+                            "crash-watch persistent lag; relying on connector fallback",
+                        );
+                        return;
+                    }
                     Err(e) => {
                         tracing::warn!(%agent_id, %session_id, %e, "crash-watch stream error");
                         continue;
