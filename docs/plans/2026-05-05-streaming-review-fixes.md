@@ -323,7 +323,7 @@ Why not Option B (monotonic counter routed through fallback): the fallback chann
 
 Why not Option C (drop dedup; rely on `RestartTracker` budget): the budget lives in the supervisor, not the registry. Each duplicate respawn would still spawn a process before the supervisor noticed.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `bin/tests/respawn_e2e.rs`. The test counts "decisions to respawn" (incremented just after the dedup gate passes) rather than "successful respawns" (which would require `fake_claude` and a real `resume()` to succeed). The counter increments inside lock cycle 1 — atomic with the dedup decision, deterministic without timing.
 
@@ -368,12 +368,12 @@ async fn double_fallback_only_respawns_once() {
 
 This requires test seams `install_respawn_counter_for_test` and `respawn_count_for_test` (added in Step 3). Both are async because they touch `tokio::sync::Mutex`.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p nephila --test respawn_e2e double_fallback -- --nocapture`
 Expected: compile error pending Step 3 seams; once seams are in place, PANIC `expected exactly one respawn decision; got 2`.
 
-- [ ] **Step 3: Add new fields to `RespawnState` and counter test seams**
+- [x] **Step 3: Add new fields to `RespawnState` and counter test seams**
 
 Find `struct RespawnState` in `bin/src/session_registry.rs` (currently around line 73). Replace with:
 
@@ -411,7 +411,7 @@ pub async fn respawn_count_for_test(&self, agent_id: AgentId) -> u64 {
 }
 ```
 
-- [ ] **Step 4: Restructure `on_crash` — release the lock around `resume()`**
+- [x] **Step 4: Restructure `on_crash` — release the lock around `resume()`**
 
 Find `pub async fn on_crash(self: &Arc<Self>, agent_id: AgentId, crash_seq: u64)` (currently around line 323). The current shape acquires `let mut state = lock.lock().await;` and holds the guard through the entire function. Restructure into three phases. Replacement skeleton (preserve existing `tracing::instrument` attribute and surrounding test seam at `#[cfg(test)]` `abort_after_drop_old`):
 
@@ -529,22 +529,22 @@ Key invariants:
 - Phase 3 ALWAYS resets `respawn_in_flight = false`. No early-return path between Phase 1 and Phase 3 — Phase 2's work is in `do_respawn_work` which returns a `Result`, never panics through. (If it could panic, wrap with `tokio::task::spawn`'s catch-unwind or `AssertUnwindSafe` + `FuturesExt::catch_unwind`. For now, treat resume failures as `Err`, not panic.)
 - The `#[cfg(test)] abort_after_drop_old` test path returns `Err`, so Phase 3 still runs and clears `respawn_in_flight`. The existing `crash_during_respawn_orphan_recovery` test must still pass.
 
-- [ ] **Step 5: Run the test**
+- [x] **Step 5: Run the test**
 
 Run: `cargo test -p nephila --test respawn_e2e double_fallback -- --nocapture`
 Expected: PASS — both assertions hit `count == 1`.
 
-- [ ] **Step 6: Run the full respawn suite**
+- [x] **Step 6: Run the full respawn suite**
 
 Run: `cargo test -p nephila --test respawn_e2e -- --nocapture`
 Expected: PASS — including `crash_during_respawn_orphan_recovery` (which exercises the test-only abort path; verify Phase 3 still runs after the simulated abort by reading the test).
 
-- [ ] **Step 7: Run cargo check + clippy**
+- [x] **Step 7: Run cargo check + clippy**
 
 Run: `cargo check -p nephila && cargo clippy -p nephila -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```
 git add bin/src/session_registry.rs bin/tests/respawn_e2e.rs

@@ -340,6 +340,43 @@ async fn crash_watch_recovers_session_crashed_after_broadcast_lag() {
 }
 
 #[tokio::test]
+async fn double_fallback_only_respawns_once() {
+    let store = Arc::new(SqliteStore::open_in_memory(384).expect("store"));
+    let blob = Arc::new(SqliteBlobReader::new(store.read_pool()));
+    let defaults = RegistryDefaults {
+        claude_binary: PathBuf::from("/usr/bin/false"),
+        mcp_endpoint: "http://stub".into(),
+        permission_mode: "bypassPermissions".into(),
+    };
+    let registry = Arc::new(SessionRegistry::new(
+        Arc::clone(&store),
+        Arc::clone(&blob),
+        defaults,
+    ));
+
+    let agent_id = AgentId::new();
+    let session_id = Uuid::new_v4();
+    registry.bind_session_id_for_test(agent_id, session_id);
+    // Materialise the respawn_states entry so both callers race the SAME mutex.
+    registry.install_respawn_counter_for_test(agent_id).await;
+
+    // Fire fallback twice. tokio::join polls them in order; with the lock
+    // released across resume(), the second call observes in_flight=true.
+    let r1 = registry.clone();
+    let r2 = registry.clone();
+    tokio::join!(r1.on_crash(agent_id, 0), r2.on_crash(agent_id, 0));
+
+    let count = registry.respawn_count_for_test(agent_id).await;
+    assert_eq!(count, 1, "expected exactly one respawn decision; got {count}");
+
+    // Sanity check — a second call after the first completes within the
+    // dedup window must also be skipped.
+    registry.on_crash(agent_id, 0).await;
+    let count = registry.respawn_count_for_test(agent_id).await;
+    assert_eq!(count, 1, "fallback within dedup window must skip; got {count}");
+}
+
+#[tokio::test]
 async fn crash_during_respawn_orphan_recovery() {
     let Some(fake) = fake_claude_path() else {
         eprintln!("fake_claude binary not found; skipping crash_during_respawn_orphan_recovery");

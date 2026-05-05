@@ -70,12 +70,28 @@ struct SessionHandle {
     pump: tokio::task::AbortHandle,
 }
 
+/// Crashes that arrive via the fallback channel carry no sequence number
+/// (the connector sends only the `AgentId`). To dedupe a connector that
+/// sends twice in a row — or a fallback that races a delayed store-path
+/// crash — collapse fallback respawns that land within this window.
+const FALLBACK_DEDUP_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[derive(Default)]
 struct RespawnState {
     /// Sequence number of the last crash event handled for this agent.
     /// Duplicates (e.g. from a Lagged-recovery re-subscription) with
     /// `sequence <= last_handled_crash_seq` are dropped without spawning.
     last_handled_crash_seq: Option<u64>,
+    /// True between Phase 1 (decision) and Phase 3 (commit) of `on_crash`.
+    /// Concurrent callers that observe `true` skip — the in-flight respawn
+    /// will install the new handle.
+    respawn_in_flight: bool,
+    /// Wall-clock instant at which the last respawn decision was committed.
+    /// Used to dedupe `crash_seq == 0` (fallback) replays within
+    /// `FALLBACK_DEDUP_WINDOW`.
+    last_respawn_at: Option<std::time::Instant>,
+    #[cfg(test)]
+    respawn_count: u64,
 }
 
 pub struct SessionRegistry {
@@ -324,8 +340,13 @@ impl SessionRegistry {
     }
 
     /// Handle a crash — drop the old handle, resume via
-    /// `ClaudeCodeSession::resume`, install the new handle. Idempotent on
-    /// `crash_seq` to deduplicate replay/Lagged-recovery deliveries.
+    /// `ClaudeCodeSession::resume`, install the new handle.
+    ///
+    /// Dedup runs in three phases so the per-agent `RespawnState` mutex is
+    /// NOT held across `resume().await`. Two concurrent callers (e.g. the
+    /// store-path watcher and the fallback channel listener) racing on this
+    /// agent will both reach Phase 1, but only the first observes
+    /// `respawn_in_flight = false` and proceeds; the second skips.
     #[tracing::instrument(level = "debug", skip(self), fields(%agent_id, crash_seq))]
     pub async fn on_crash(self: &Arc<Self>, agent_id: AgentId, crash_seq: u64) {
         let lock = self
@@ -333,24 +354,67 @@ impl SessionRegistry {
             .entry(agent_id)
             .or_insert_with(|| Arc::new(Mutex::new(RespawnState::default())))
             .clone();
-        let mut state = lock.lock().await;
 
-        // Idempotency: a crash_seq of 0 means "out-of-band fallback" — we
-        // can't dedupe via sequence; rely on the fact that the old session's
-        // crash-watch task has already broken out of its loop, so we never
-        // observe the same crash twice through the store path. For nonzero
-        // sequences, drop duplicates.
-        if crash_seq != 0
-            && let Some(prev) = state.last_handled_crash_seq
-            && crash_seq <= prev
+        // Phase 1: dedup decision — atomic with setting `respawn_in_flight`.
         {
-            tracing::debug!(%agent_id, crash_seq, prev, "duplicate crash; skipping respawn");
-            return;
-        }
+            let mut state = lock.lock().await;
+            if state.respawn_in_flight {
+                tracing::debug!(%agent_id, crash_seq, "respawn already in flight; skipping");
+                return;
+            }
+            if crash_seq != 0
+                && let Some(prev) = state.last_handled_crash_seq
+                && crash_seq <= prev
+            {
+                tracing::debug!(%agent_id, crash_seq, prev, "duplicate crash sequence; skipping");
+                return;
+            }
+            if crash_seq == 0
+                && let Some(last) = state.last_respawn_at
+                && last.elapsed() < FALLBACK_DEDUP_WINDOW
+            {
+                tracing::debug!(
+                    %agent_id,
+                    last_respawn_ago_ms = last.elapsed().as_millis() as u64,
+                    "fallback within dedup window; skipping",
+                );
+                return;
+            }
+            state.respawn_in_flight = true;
+            #[cfg(test)]
+            {
+                state.respawn_count += 1;
+            }
+        } // drop(state) — lock released before any awaits below.
 
-        // Drop old handle (graceful — abort the watch task; the connector's
-        // own reader has already emitted SessionCrashed and its tasks are
-        // shutting down).
+        // Phase 2: do the work without holding the lock.
+        let result = self.do_respawn_work(agent_id).await;
+
+        // Phase 3: commit + clear in-flight, regardless of result.
+        // `last_respawn_at` is set on every attempt — the fallback dedup
+        // window also gates failed attempts so a flapping respawn doesn't
+        // spin. `last_handled_crash_seq` only advances on success, so a
+        // failed store-path respawn can be retried at the next sequence.
+        let mut state = lock.lock().await;
+        state.respawn_in_flight = false;
+        state.last_respawn_at = Some(std::time::Instant::now());
+        match result {
+            Ok(()) => {
+                state.last_handled_crash_seq = Some(crash_seq);
+            }
+            Err(e) => {
+                tracing::error!(%agent_id, %e, "respawn failed");
+            }
+        }
+    }
+
+    /// Inner respawn work — drop the old handle, resume, install the new
+    /// handle. Holds NO `RespawnState` lock; the caller manages the
+    /// in-flight flag.
+    async fn do_respawn_work(
+        self: &Arc<Self>,
+        agent_id: AgentId,
+    ) -> Result<(), RegistryError> {
         if let Some((_id, old)) = self.sessions.remove(&agent_id) {
             old.pump.abort();
             drop(old.session);
@@ -361,59 +425,42 @@ impl SessionRegistry {
             let mut tx_guard = self.abort_after_drop_old.lock().await;
             if let Some(tx) = tx_guard.take() {
                 drop(tx_guard);
-                // Signal the test that the drop happened, then await a oneshot
-                // recv that the test never fires — simulating a process abort
-                // between drop and insert.
+                // Signal the test that the drop happened, then park forever —
+                // simulating a process abort between drop and insert.
                 let _ = tx.send(());
                 let (_never_tx, never_rx) = tokio::sync::oneshot::channel::<()>();
-                let _ = never_rx.await; // never resolves
-                return; // unreachable in practice — the runtime aborts here
+                let _ = never_rx.await;
+                return Err(RegistryError::Store("test-only abort path".into()));
             }
         }
 
-        // Resume: look up session_id from our in-memory map, falling back to
-        // store.list lookup if missing.
-        let session_id = match self.session_ids.get(&agent_id).map(|r| *r) {
-            Some(sid) => sid,
-            None => {
-                tracing::warn!(%agent_id, "no session_id known; cannot resume");
-                return;
-            }
-        };
+        let session_id = self
+            .session_ids
+            .get(&agent_id)
+            .map(|r| *r)
+            .ok_or_else(|| RegistryError::Store("no session_id known".into()))?;
 
         let agent = match nephila_core::store::AgentStore::get(&*self.store, agent_id).await {
             Ok(Some(a)) => a,
-            Ok(None) => {
-                tracing::warn!(%agent_id, "agent not found in store during respawn");
-                return;
-            }
-            Err(e) => {
-                tracing::error!(%agent_id, %e, "store lookup failed during respawn");
-                return;
-            }
+            Ok(None) => return Err(RegistryError::Store("agent not found".into())),
+            Err(e) => return Err(RegistryError::Store(e.to_string())),
         };
 
         let cfg = self.cfg_from(&agent);
-        match ClaudeCodeSession::resume(cfg, session_id).await {
-            Ok(session) => {
-                let session_arc = Arc::new(session);
-                let pump = self.spawn_crash_watch(agent_id, session_id);
-                self.sessions.insert(
-                    agent_id,
-                    SessionHandle {
-                        session: Arc::clone(&session_arc),
-                        pump,
-                    },
-                );
-                state.last_handled_crash_seq = Some(crash_seq);
-                nephila_store::metrics::record_session_respawn(&session_id.to_string());
-                tracing::info!(%agent_id, %session_id, "session respawned after crash");
-                let _ = self.started_tx.send(agent_id);
-            }
-            Err(e) => {
-                tracing::error!(%agent_id, %session_id, %e, "respawn failed");
-            }
-        }
+        let session = ClaudeCodeSession::resume(cfg, session_id).await?;
+        let session_arc = Arc::new(session);
+        let pump = self.spawn_crash_watch(agent_id, session_id);
+        self.sessions.insert(
+            agent_id,
+            SessionHandle {
+                session: Arc::clone(&session_arc),
+                pump,
+            },
+        );
+        nephila_store::metrics::record_session_respawn(&session_id.to_string());
+        tracing::info!(%agent_id, %session_id, "session respawned after crash");
+        let _ = self.started_tx.send(agent_id);
+        Ok(())
     }
 
     /// Slice 4 step 5: scan `list_agents_in_active_phase` and resume each
@@ -539,6 +586,26 @@ impl SessionRegistry {
     #[cfg(test)]
     pub fn bind_session_id_for_test(&self, agent_id: AgentId, session_id: SessionId) {
         self.session_ids.insert(agent_id, session_id);
+    }
+
+    /// Test seam: pre-create the per-agent `RespawnState` entry so that
+    /// concurrent `on_crash` callers race the same mutex.
+    #[cfg(test)]
+    pub async fn install_respawn_counter_for_test(self: &Arc<Self>, agent_id: AgentId) {
+        let _ = self
+            .respawn_states
+            .entry(agent_id)
+            .or_insert_with(|| Arc::new(Mutex::new(RespawnState::default())))
+            .clone();
+    }
+
+    /// Test seam: read the count of respawn decisions made for an agent.
+    #[cfg(test)]
+    pub async fn respawn_count_for_test(&self, agent_id: AgentId) -> u64 {
+        let Some(lock) = self.respawn_states.get(&agent_id).map(|r| r.clone()) else {
+            return 0;
+        };
+        lock.lock().await.respawn_count
     }
 }
 
