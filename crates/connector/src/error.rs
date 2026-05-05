@@ -19,11 +19,27 @@ pub enum ConnectorError {
     #[error("transport error: {0}")]
     Transport(String),
 
+    /// Subprocess exited non-zero with captured stderr.
     #[error("process error (exit code {exit_code:?}): {stderr}")]
     Process {
         exit_code: Option<i32>,
         stderr: String,
     },
+
+    /// Failure spawning a child process or performing other I/O syscalls
+    /// associated with the subprocess lifecycle.
+    #[error("spawn error: {0}")]
+    Spawn(#[from] std::io::Error),
+
+    /// Event-store append / load failure surfaced from the connector's
+    /// reader/writer tasks.
+    #[error("persist error: {0}")]
+    Persist(#[from] nephila_eventsourcing::store::EventStoreError),
+
+    /// JSON encoding/decoding failure when serialising envelopes or
+    /// claude protocol payloads.
+    #[error("serialize error: {0}")]
+    Serialize(#[from] serde_json::Error),
 
     #[error("invalid response: {0}")]
     InvalidResponse(String),
@@ -67,6 +83,34 @@ mod tests {
         };
         let me: NephilaError = err.into();
         assert!(me.to_string().contains("segfault"));
+    }
+
+    #[test]
+    fn spawn_error_converts_to_nephila_error() {
+        let io_err = std::io::Error::other("fork failed");
+        let err = ConnectorError::Spawn(io_err);
+        let me: NephilaError = err.into();
+        assert!(matches!(me, NephilaError::Connector(_)));
+        assert!(me.to_string().contains("spawn error"));
+    }
+
+    #[test]
+    fn persist_error_converts_to_nephila_error() {
+        let store_err = nephila_eventsourcing::store::EventStoreError::storage_msg("db down");
+        let err = ConnectorError::Persist(store_err);
+        let me: NephilaError = err.into();
+        assert!(matches!(me, NephilaError::Connector(_)));
+        assert!(me.to_string().contains("persist error"));
+    }
+
+    #[test]
+    fn serialize_error_converts_to_nephila_error() {
+        let json_err = serde_json::from_str::<serde_json::Value>("not json")
+            .expect_err("invalid json must fail to parse");
+        let err = ConnectorError::Serialize(json_err);
+        let me: NephilaError = err.into();
+        assert!(matches!(me, NephilaError::Connector(_)));
+        assert!(me.to_string().contains("serialize error"));
     }
 
     #[test]

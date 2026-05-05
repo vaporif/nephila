@@ -44,6 +44,7 @@ use nephila_eventsourcing::snapshot::Snapshot;
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
 use nephila_store::blob::{PreparedBlob, SqliteBlobReader, prepare_blob};
+use parking_lot::Mutex as ParkingMutex;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{Mutex, mpsc};
@@ -109,9 +110,9 @@ struct Turn {
     turn_id: TurnId,
 }
 
-type StderrRing = Arc<std::sync::Mutex<VecDeque<String>>>;
-type OpenTurn = Arc<std::sync::Mutex<Option<TurnId>>>;
-type ToolNames = Arc<std::sync::Mutex<HashMap<String, String>>>;
+type StderrRing = Arc<ParkingMutex<VecDeque<String>>>;
+type OpenTurn = Arc<ParkingMutex<Option<TurnId>>>;
+type ToolNames = Arc<ParkingMutex<HashMap<String, String>>>;
 
 pub struct ClaudeCodeSession {
     session_id: Uuid,
@@ -237,31 +238,46 @@ impl ClaudeCodeSession {
             Err(e) => return ResumeOutcome::HardError(format!("spawn --resume: {e}")),
         };
 
-        let Some(stderr_pipe) = child.stderr.take() else {
+        if child.stderr.is_none() {
             return ResumeOutcome::HardError("--resume probe: no stderr pipe".into());
-        };
+        }
 
-        let stderr_handle = tokio::spawn(async move {
+        let probe_duration = Duration::from_secs(2);
+        let mut stderr_buf = Vec::new();
+
+        // Race the probe timeout against draining stderr. Whichever resolves
+        // first wins; on timeout we kill the child so the caller can re-spawn.
+        let exit = {
             use tokio::io::AsyncReadExt;
-            let mut buf = Vec::new();
-            let _ = tokio::io::BufReader::new(stderr_pipe)
-                .read_to_end(&mut buf)
-                .await;
-            String::from_utf8_lossy(&buf).into_owned()
-        });
-
-        let exit = match tokio::time::timeout(Duration::from_secs(2), child.wait()).await {
-            Ok(Ok(status)) => status,
-            Ok(Err(e)) => {
-                stderr_handle.abort();
-                return ResumeOutcome::HardError(format!("--resume wait: {e}"));
-            }
-            Err(_) => {
-                // Still alive after 2s — assume `--resume` is running cleanly.
-                // Kill the probe so the caller can re-spawn cleanly.
-                let _ = child.kill().await;
-                stderr_handle.abort();
-                return ResumeOutcome::Ok;
+            let Some(mut stderr_pipe) = child.stderr.take() else {
+                return ResumeOutcome::HardError("--resume probe: no stderr pipe".into());
+            };
+            tokio::select! {
+                wait_res = tokio::time::timeout(probe_duration, child.wait()) => match wait_res {
+                    Ok(Ok(status)) => status,
+                    Ok(Err(e)) => {
+                        return ResumeOutcome::HardError(format!("--resume wait: {e}"));
+                    }
+                    Err(_) => {
+                        let _ = child.kill().await;
+                        return ResumeOutcome::Ok;
+                    }
+                },
+                read_res = stderr_pipe.read_to_end(&mut stderr_buf) => {
+                    // stderr closed first; usually means the child has exited
+                    // or is about to. Fall through to wait for the exit status.
+                    let _ = read_res;
+                    match tokio::time::timeout(probe_duration, child.wait()).await {
+                        Ok(Ok(status)) => status,
+                        Ok(Err(e)) => {
+                            return ResumeOutcome::HardError(format!("--resume wait: {e}"));
+                        }
+                        Err(_) => {
+                            let _ = child.kill().await;
+                            return ResumeOutcome::Ok;
+                        }
+                    }
+                }
             }
         };
 
@@ -271,7 +287,7 @@ impl ClaudeCodeSession {
             return ResumeOutcome::Ok;
         }
 
-        let stderr_text = stderr_handle.await.unwrap_or_default();
+        let stderr_text = String::from_utf8_lossy(&stderr_buf).into_owned();
         if crate::resume::is_resume_not_found(&stderr_text) {
             ResumeOutcome::FallbackToSessionId
         } else {
@@ -297,12 +313,7 @@ impl ClaudeCodeSession {
 
         let mcp_config = build_mcp_config(&mcp_endpoint);
         let mcp_config_path = working_dir.join(".mcp.json");
-        tokio::fs::write(&mcp_config_path, &mcp_config)
-            .await
-            .map_err(|e| ConnectorError::Process {
-                exit_code: None,
-                stderr: format!("failed to write .mcp.json: {e}"),
-            })?;
+        tokio::fs::write(&mcp_config_path, &mcp_config).await?;
 
         let mut command = Command::new(&claude_binary);
         command
@@ -331,11 +342,7 @@ impl ClaudeCodeSession {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(false)
-            .spawn()
-            .map_err(|e| ConnectorError::Process {
-                exit_code: None,
-                stderr: format!("failed to spawn claude: {e}"),
-            })?;
+            .spawn()?;
 
         let stdin = child.stdin.take().ok_or_else(|| ConnectorError::Process {
             exit_code: None,
@@ -353,11 +360,10 @@ impl ClaudeCodeSession {
         let (turns_tx, turns_rx) = mpsc::channel::<Turn>(TURNS_CHANNEL_BOUND);
         let cancel = CancellationToken::new();
 
-        let stderr_ring: StderrRing = Arc::new(std::sync::Mutex::new(VecDeque::with_capacity(
-            STDERR_RING_CAP,
-        )));
-        let open_turn: OpenTurn = Arc::new(std::sync::Mutex::new(None));
-        let tool_names: ToolNames = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        let stderr_ring: StderrRing =
+            Arc::new(ParkingMutex::new(VecDeque::with_capacity(STDERR_RING_CAP)));
+        let open_turn: OpenTurn = Arc::new(ParkingMutex::new(None));
+        let tool_names: ToolNames = Arc::new(ParkingMutex::new(HashMap::new()));
         let shutting_down = Arc::new(AtomicBool::new(false));
 
         // SessionStarted lands as the very first envelope so consumers can
@@ -385,12 +391,7 @@ impl ClaudeCodeSession {
                 "session resumed via --session-id fallback after --resume failed",
             );
         }
-        append_one(&store, session_id, &started)
-            .await
-            .map_err(|e| ConnectorError::Process {
-                exit_code: None,
-                stderr: format!("persist SessionStarted: {e}"),
-            })?;
+        append_one(&store, session_id, &started).await?;
 
         let stderr_handle = tokio::spawn(stderr_drain_task(stderr, Arc::clone(&stderr_ring)));
 
@@ -642,12 +643,11 @@ fn build_mcp_config(mcp_endpoint: &str) -> String {
 async fn stderr_drain_task(stderr: tokio::process::ChildStderr, ring: StderrRing) {
     let mut reader = BufReader::new(stderr).lines();
     while let Ok(Some(line)) = reader.next_line().await {
-        if let Ok(mut g) = ring.lock() {
-            if g.len() == STDERR_RING_CAP {
-                g.pop_front();
-            }
-            g.push_back(line);
+        let mut g = ring.lock();
+        if g.len() == STDERR_RING_CAP {
+            g.pop_front();
         }
+        g.push_back(line);
     }
 }
 
@@ -669,14 +669,12 @@ pub fn redact_stderr(s: &str) -> String {
 }
 
 fn snapshot_stderr_tail(ring: &StderrRing) -> String {
-    let joined = ring.lock().map_or_else(
-        |_| String::new(),
-        |g| {
-            let n = g.len().min(STDERR_TAIL_LINES);
-            let start = g.len() - n;
-            g.iter().skip(start).cloned().collect::<Vec<_>>().join("\n")
-        },
-    );
+    let joined = {
+        let g = ring.lock();
+        let n = g.len().min(STDERR_TAIL_LINES);
+        let start = g.len() - n;
+        g.iter().skip(start).cloned().collect::<Vec<_>>().join("\n")
+    };
     redact_stderr(&joined)
 }
 
@@ -905,7 +903,7 @@ async fn process_frame(
             }
 
             let stop_reason = r.stop_reason.unwrap_or_else(|| "end_turn".into());
-            let turn_id = open_turn.lock().ok().and_then(|mut g| g.take());
+            let turn_id = open_turn.lock().take();
 
             if let Some(turn_id) = turn_id {
                 events.push(SessionEvent::TurnCompleted {
@@ -929,16 +927,13 @@ async fn process_frame(
 }
 
 fn record_tool_use(tool_names: &ToolNames, tool_use_id: &str, tool_name: &str) {
-    if let Ok(mut g) = tool_names.lock() {
-        g.insert(tool_use_id.to_owned(), tool_name.to_owned());
-    }
+    tool_names
+        .lock()
+        .insert(tool_use_id.to_owned(), tool_name.to_owned());
 }
 
 fn lookup_tool_name(tool_names: &ToolNames, tool_use_id: &str) -> Option<String> {
-    tool_names
-        .lock()
-        .ok()
-        .and_then(|mut g| g.remove(tool_use_id))
+    tool_names.lock().remove(tool_use_id)
 }
 
 /// Builds a `ToolResult` event (inline or spilled per `TOOL_RESULT_INLINE_MAX`)
@@ -1059,7 +1054,8 @@ async fn handle_terminal(
     }
 
     let mut events = Vec::new();
-    if let Some(turn_id) = open_turn.lock().ok().and_then(|mut g| g.take()) {
+    let open = open_turn.lock().take();
+    if let Some(turn_id) = open {
         events.push(SessionEvent::TurnAborted {
             turn_id,
             reason: "session_crashed".into(),
@@ -1179,9 +1175,7 @@ async fn writer_task(
                 if let Err(e) = append_one(&store, session_id, &delivered).await {
                     tracing::error!(error = %e, "failed to persist *PromptDelivered");
                 }
-                if let Ok(mut g) = open_turn.lock() {
-                    *g = Some(turn.turn_id);
-                }
+                *open_turn.lock() = Some(turn.turn_id);
             }
             Err(e) => {
                 let failed = SessionEvent::PromptDeliveryFailed {
@@ -1197,24 +1191,22 @@ async fn writer_task(
 }
 
 fn make_envelope(session_id: Uuid, event: &SessionEvent) -> Result<EventEnvelope, ConnectorError> {
-    let payload = serde_json::to_value(event).map_err(|e| ConnectorError::Process {
-        exit_code: None,
-        stderr: format!("serialize SessionEvent: {e}"),
-    })?;
-    Ok(EventEnvelope {
-        id: EventId::new(),
-        aggregate_type: "session".to_owned(),
-        aggregate_id: session_id.to_string(),
-        // Stamped by the writer thread per ADR-0002.
-        sequence: 0,
-        event_type: event.kind().to_owned(),
-        payload,
-        trace_id: TraceId(session_id.to_string()),
-        outcome: None,
-        timestamp: Utc::now(),
-        context_snapshot: None,
-        metadata: HashMap::new(),
-    })
+    let payload = serde_json::to_value(event)?;
+    // Sequence is stamped by the writer thread per ADR-0002 / ADR-0003.
+    Ok(EventEnvelope::new(
+        nephila_eventsourcing::envelope::NewEventEnvelope {
+            id: EventId::new(),
+            aggregate_type: "session".to_owned(),
+            aggregate_id: session_id.to_string(),
+            event_type: event.kind().to_owned(),
+            payload,
+            trace_id: TraceId(session_id.to_string()),
+            outcome: None,
+            timestamp: Utc::now(),
+            context_snapshot: None,
+            metadata: HashMap::new(),
+        },
+    ))
 }
 
 async fn append_one(
@@ -1223,13 +1215,7 @@ async fn append_one(
     event: &SessionEvent,
 ) -> Result<(), ConnectorError> {
     let env = make_envelope(session_id, event)?;
-    store
-        .append_batch(vec![env])
-        .await
-        .map_err(|e| ConnectorError::Process {
-            exit_code: None,
-            stderr: format!("append: {e}"),
-        })?;
+    store.append_batch(vec![env]).await?;
     Ok(())
 }
 
@@ -1247,21 +1233,9 @@ async fn append_batch(
         .map(|e| make_envelope(session_id, e))
         .collect::<Result<Vec<_>, _>>()?;
     if blobs.is_empty() {
-        store
-            .append_batch(envelopes)
-            .await
-            .map_err(|e| ConnectorError::Process {
-                exit_code: None,
-                stderr: format!("append_batch: {e}"),
-            })?;
+        store.append_batch(envelopes).await?;
     } else {
-        store
-            .append_batch_with_blobs(envelopes, blobs)
-            .await
-            .map_err(|e| ConnectorError::Process {
-                exit_code: None,
-                stderr: format!("append_batch_with_blobs: {e}"),
-            })?;
+        store.append_batch_with_blobs(envelopes, blobs).await?;
     }
     Ok(())
 }
@@ -1280,13 +1254,13 @@ async fn save_terminal_snapshot(
     let mut state = Session::default_state();
     let mut last_seq = 0u64;
     for env in &events {
-        state = state.apply_envelope(env).map_err(|e| {
-            nephila_eventsourcing::store::EventStoreError::Serialization(e.to_string())
-        })?;
-        last_seq = env.sequence;
+        state = state
+            .apply_envelope(env)
+            .map_err(nephila_eventsourcing::store::EventStoreError::serialization)?;
+        last_seq = env.sequence();
     }
     let state_value = serde_json::to_value(&state)
-        .map_err(|e| nephila_eventsourcing::store::EventStoreError::Serialization(e.to_string()))?;
+        .map_err(nephila_eventsourcing::store::EventStoreError::serialization)?;
     let snap = Snapshot {
         aggregate_type: "session".to_owned(),
         aggregate_id: agg_id,
@@ -1301,24 +1275,24 @@ async fn save_terminal_snapshot(
 mod tool_names_cleanup_tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     fn fresh_tool_names() -> ToolNames {
-        Arc::new(Mutex::new(HashMap::new()))
+        Arc::new(ParkingMutex::new(HashMap::new()))
     }
 
     #[test]
     fn plain_tool_result_drains_tool_names_entry() {
         let names = fresh_tool_names();
         record_tool_use(&names, "tool-1", "Read");
-        assert_eq!(names.lock().unwrap().len(), 1);
+        assert_eq!(names.lock().len(), 1);
 
         let raw = serde_json::Value::String("ok".into());
         let mut events: Vec<SessionEvent> = Vec::new();
         let _prepared = build_tool_result_event(&names, "tool-1", &raw, false, &mut events);
 
         assert_eq!(
-            names.lock().unwrap().len(),
+            names.lock().len(),
             0,
             "ToolResult handling must drain the tool_names entry",
         );
@@ -1333,6 +1307,6 @@ mod tool_names_cleanup_tests {
         let mut events: Vec<SessionEvent> = Vec::new();
         let _prepared = build_tool_result_event(&names, "tool-2", &raw, false, &mut events);
 
-        assert_eq!(names.lock().unwrap().len(), 0);
+        assert_eq!(names.lock().len(), 0);
     }
 }

@@ -132,7 +132,7 @@ where
             while let Some(item) = stream.next().await {
                 match item {
                     Ok(env) => {
-                        last_seq = env.sequence;
+                        last_seq = env.sequence();
                         retry.note_clean_recv();
                         if tx.send(Ok(env)).await.is_err() {
                             return;

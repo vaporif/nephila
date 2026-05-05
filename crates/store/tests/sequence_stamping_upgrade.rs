@@ -10,18 +10,17 @@
 //!      `debug_assert!` in the writer thread).
 
 use chrono::Utc;
-use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::{EventEnvelope, NewEventEnvelope};
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
 use std::collections::HashMap;
 
 fn env_with_seq_zero(agg_type: &str, agg_id: &str) -> EventEnvelope {
-    EventEnvelope {
+    EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: agg_type.into(),
         aggregate_id: agg_id.into(),
-        sequence: 0,
         event_type: "test".into(),
         payload: serde_json::json!({}),
         trace_id: TraceId("trace".into()),
@@ -29,7 +28,7 @@ fn env_with_seq_zero(agg_type: &str, agg_id: &str) -> EventEnvelope {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    })
 }
 
 #[tokio::test]
@@ -51,7 +50,7 @@ async fn writer_continues_from_max_when_pre_existing_rows_have_caller_stamped_se
 
     let all = store.load_events("agent", "agent-A", 0).await.unwrap();
     assert_eq!(
-        all.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+        all.iter().map(|e| e.sequence()).collect::<Vec<_>>(),
         vec![1, 2, 3, 4, 5, 6]
     );
 }
@@ -82,11 +81,11 @@ async fn writer_overwrites_caller_supplied_nonzero_sequence_in_release_builds() 
 
     let store = SqliteStore::open_in_memory(384).unwrap();
     let mut env = env_with_seq_zero("agent", "agent-C");
-    env.sequence = 999;
+    env.set_sequence(999);
     let appended = store.append_batch(vec![env]).await.unwrap();
     assert_eq!(appended, vec![1], "writer must overwrite caller value");
 
     let rows = store.load_events("agent", "agent-C", 0).await.unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].sequence, 1);
+    assert_eq!(rows[0].sequence(), 1);
 }

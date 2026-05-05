@@ -123,11 +123,10 @@ fn actions_to_events(actions: &[Action]) -> Vec<SessionEvent> {
 }
 
 fn envelope(event: &SessionEvent, sequence: u64, agg_id: &str) -> EventEnvelope {
-    EventEnvelope {
+    let mut env = EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".into(),
         aggregate_id: agg_id.into(),
-        sequence,
         event_type: event.kind().into(),
         payload: serde_json::to_value(event).unwrap(),
         trace_id: TraceId("t".into()),
@@ -135,7 +134,9 @@ fn envelope(event: &SessionEvent, sequence: u64, agg_id: &str) -> EventEnvelope 
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    });
+    env.set_sequence(sequence);
+    env
 }
 
 fn fold_apply_envelope(start: Session, envs: &[EventEnvelope]) -> Session {

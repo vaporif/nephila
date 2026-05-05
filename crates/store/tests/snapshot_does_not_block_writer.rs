@@ -9,7 +9,7 @@
 use chrono::Utc;
 use nephila_core::session_event::SessionEvent;
 use nephila_core::store::AgentStore;
-use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::{EventEnvelope, NewEventEnvelope};
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
@@ -28,11 +28,10 @@ fn make_test_envelope(agg: &str, message_id: &str) -> EventEnvelope {
         truncated: false,
         ts: Utc::now(),
     };
-    EventEnvelope {
+    EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".to_owned(),
         aggregate_id: agg.to_owned(),
-        sequence: 0,
         event_type: "AssistantMessage".to_owned(),
         payload: serde_json::to_value(&event).unwrap(),
         trace_id: TraceId(agg.to_owned()),
@@ -40,7 +39,7 @@ fn make_test_envelope(agg: &str, message_id: &str) -> EventEnvelope {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

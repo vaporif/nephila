@@ -17,8 +17,7 @@ use nephila_eventsourcing::store::EventStoreError;
 use rusqlite::{Connection, params};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::mpsc;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 type GenericFunc = Box<dyn FnOnce(&mut Connection) + Send>;
 
@@ -45,6 +44,10 @@ pub(crate) enum WriterCmd {
     },
 }
 
+/// Channel buffer for writer commands. Bounded so async callers `.await` on
+/// backpressure rather than letting an unbounded queue grow without limit.
+const WRITER_CHANNEL_BUFFER: usize = 64;
+
 #[derive(Clone)]
 pub struct WriterHandle {
     tx: mpsc::Sender<WriterCmd>,
@@ -65,7 +68,7 @@ impl WriterHandle {
         if let Err(e) = crate::schema::apply_tuning_pragmas(&conn) {
             tracing::warn!(%e, "writer pragma application failed");
         }
-        let (tx, rx) = mpsc::channel::<WriterCmd>();
+        let (tx, rx) = mpsc::channel::<WriterCmd>(WRITER_CHANNEL_BUFFER);
         let bcasts = broadcasts.clone();
         std::thread::spawn(move || writer_loop(conn, rx, bcasts));
         Self { tx, broadcasts }
@@ -89,6 +92,7 @@ impl WriterHandle {
         };
         self.tx
             .send(cmd)
+            .await
             .map_err(|_| crate::StoreError::WriterClosed)?;
         resp_rx
             .await
@@ -108,9 +112,10 @@ impl WriterHandle {
                 blobs,
                 reply,
             })
-            .map_err(|_| EventStoreError::Storage("writer closed".into()))?;
+            .await
+            .map_err(|_| EventStoreError::storage_msg("writer closed"))?;
         rx.await
-            .map_err(|_| EventStoreError::Storage("writer reply dropped".into()))?
+            .map_err(|_| EventStoreError::storage_msg("writer reply dropped"))?
     }
 
     pub(crate) async fn head_sequence(
@@ -125,9 +130,10 @@ impl WriterHandle {
                 agg_id: agg_id.into(),
                 reply,
             })
-            .map_err(|_| EventStoreError::Storage("writer closed".into()))?;
+            .await
+            .map_err(|_| EventStoreError::storage_msg("writer closed"))?;
         rx.await
-            .map_err(|_| EventStoreError::Storage("writer reply dropped".into()))?
+            .map_err(|_| EventStoreError::storage_msg("writer reply dropped"))?
     }
 
     pub(crate) async fn prune(
@@ -144,19 +150,20 @@ impl WriterHandle {
                 before,
                 reply,
             })
-            .map_err(|_| EventStoreError::Storage("writer closed".into()))?;
+            .await
+            .map_err(|_| EventStoreError::storage_msg("writer closed"))?;
         rx.await
-            .map_err(|_| EventStoreError::Storage("writer reply dropped".into()))?
+            .map_err(|_| EventStoreError::storage_msg("writer reply dropped"))?
     }
 }
 
 fn writer_loop(
     mut conn: Connection,
-    rx: mpsc::Receiver<WriterCmd>,
+    mut rx: mpsc::Receiver<WriterCmd>,
     broadcasts: Arc<BroadcastRegistry>,
 ) {
     let mut next_sequence: HashMap<(String, String), u64> = HashMap::new();
-    while let Ok(cmd) = rx.recv() {
+    while let Some(cmd) = rx.blocking_recv() {
         match cmd {
             WriterCmd::Generic { func } => {
                 func(&mut conn);
@@ -193,7 +200,7 @@ fn writer_loop(
                             params![&agg_type, &agg_id],
                             |row| row.get(0),
                         )
-                        .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+                        .map_err(EventStoreError::storage)?;
                     Ok(max as u64)
                 })();
                 let _ = reply.send(result);
@@ -211,7 +218,7 @@ fn writer_loop(
                         params![&agg_type, &agg_id, before as i64],
                     )
                     .map(|n| n as u64)
-                    .map_err(|e| EventStoreError::Storage(e.to_string()));
+                    .map_err(EventStoreError::storage);
                 if result.is_ok() {
                     // Drop cached next_sequence — pruning may invalidate the
                     // lazy cache when ALL rows are deleted; the next append
@@ -231,16 +238,14 @@ fn handle_append(
     blobs: Vec<PreparedBlob>,
     next_sequence: &mut HashMap<(String, String), u64>,
 ) -> Result<(Vec<u64>, Vec<EventEnvelope>), EventStoreError> {
-    let tx = conn
-        .transaction()
-        .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+    let tx = conn.transaction().map_err(EventStoreError::storage)?;
 
     for blob in &blobs {
         tx.execute(
             "INSERT OR IGNORE INTO blobs (hash, payload, original_len) VALUES (?1, ?2, ?3)",
             params![&blob.hash, &blob.payload, blob.original_len as i64],
         )
-        .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+        .map_err(EventStoreError::storage)?;
     }
 
     // Cache writes are deferred until AFTER `tx.commit()` succeeds. If the
@@ -253,11 +258,11 @@ fn handle_append(
     // touching the durable cache.
     let mut assigned = Vec::with_capacity(envelopes.len());
     let mut batch_max: HashMap<(String, String), u64> = HashMap::new();
+    // ADR-0003: EventEnvelope::sequence is private; `EventEnvelope::new` seeds
+    // it to 0 unconditionally. Tests that exercise non-zero pre-stamping
+    // (`sequence_stamping_upgrade.rs`) call `set_sequence` deliberately and
+    // are expected to trip the unconditional overwrite below.
     for env in &mut envelopes {
-        debug_assert!(
-            env.sequence == 0,
-            "EventEnvelope::sequence must be 0 on append; writer stamps it (ADR-0002)"
-        );
         let key = (env.aggregate_type.clone(), env.aggregate_id.clone());
         let next = match batch_max.get(&key) {
             Some(&n) => n + 1,
@@ -271,24 +276,24 @@ fn handle_append(
                             params![&env.aggregate_type, &env.aggregate_id],
                             |r| r.get(0),
                         )
-                        .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+                        .map_err(EventStoreError::storage)?;
                     from_disk as u64 + 1
                 }
             },
         };
-        env.sequence = next;
+        env.set_sequence(next);
         batch_max.insert(key, next);
         assigned.push(next);
 
         let id = env.id.0.to_string();
-        let payload = serde_json::to_string(&env.payload)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?;
-        let outcome = serde_json::to_string(&env.outcome)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?;
-        let context_snapshot = serde_json::to_string(&env.context_snapshot)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?;
-        let metadata = serde_json::to_string(&env.metadata)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?;
+        let payload =
+            serde_json::to_string(&env.payload).map_err(EventStoreError::serialization)?;
+        let outcome =
+            serde_json::to_string(&env.outcome).map_err(EventStoreError::serialization)?;
+        let context_snapshot =
+            serde_json::to_string(&env.context_snapshot).map_err(EventStoreError::serialization)?;
+        let metadata =
+            serde_json::to_string(&env.metadata).map_err(EventStoreError::serialization)?;
         let timestamp = env.timestamp.to_rfc3339();
 
         tx.execute(
@@ -298,7 +303,7 @@ fn handle_append(
                 id,
                 &env.aggregate_type,
                 &env.aggregate_id,
-                env.sequence as i64,
+                env.sequence() as i64,
                 &env.event_type,
                 payload,
                 &env.trace_id.0,
@@ -308,7 +313,7 @@ fn handle_append(
                 metadata,
             ],
         )
-        .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+        .map_err(EventStoreError::storage)?;
     }
 
     // Test seam: simulate a commit failure to exercise the cache-rollback
@@ -318,11 +323,10 @@ fn handle_append(
     #[cfg(any(test, feature = "test-seam"))]
     if FORCE_COMMIT_FAILURE.load(std::sync::atomic::Ordering::SeqCst) {
         FORCE_COMMIT_FAILURE.store(false, std::sync::atomic::Ordering::SeqCst);
-        return Err(EventStoreError::Storage("forced commit failure".into()));
+        return Err(EventStoreError::storage_msg("forced commit failure"));
     }
 
-    tx.commit()
-        .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+    tx.commit().map_err(EventStoreError::storage)?;
 
     // Commit succeeded; promote per-batch monotonic state into the durable
     // writer-thread cache so subsequent appends start from this max.

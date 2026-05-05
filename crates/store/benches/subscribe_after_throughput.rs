@@ -8,7 +8,7 @@
 use chrono::Utc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
-use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::{EventEnvelope, NewEventEnvelope};
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
@@ -21,11 +21,10 @@ const SUBSCRIBERS: usize = 4;
 const CHUNK: usize = 500;
 
 fn env(text: &str, agg_id: &str) -> EventEnvelope {
-    EventEnvelope {
+    EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".into(),
         aggregate_id: agg_id.into(),
-        sequence: 0,
         event_type: "x".into(),
         payload: serde_json::json!({"text": text}),
         trace_id: TraceId("t".into()),
@@ -33,7 +32,7 @@ fn env(text: &str, agg_id: &str) -> EventEnvelope {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    })
 }
 
 async fn one_iter() -> Duration {
@@ -49,7 +48,7 @@ async fn one_iter() -> Duration {
             let mut count = 0usize;
             while let Some(item) = stream.next().await {
                 if let Ok(env) = item {
-                    debug_assert_eq!(env.sequence, count as u64 + 1);
+                    debug_assert_eq!(env.sequence(), count as u64 + 1);
                     count += 1;
                     if count == TOTAL_EVENTS {
                         break;

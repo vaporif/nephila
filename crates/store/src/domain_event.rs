@@ -66,18 +66,18 @@ impl DomainEventStore for SqliteStore {
                      WHERE aggregate_type = ?1 AND aggregate_id = ?2 AND sequence > ?3
                      ORDER BY sequence ASC",
                 )
-                .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+                .map_err(EventStoreError::storage)?;
             let rows: Result<Vec<EventEnvelope>, rusqlite::Error> = stmt
                 .query_map(
                     rusqlite::params![agg_type, agg_id, since_sequence as i64],
                     row_to_envelope,
                 )
-                .map_err(|e| EventStoreError::Storage(e.to_string()))?
+                .map_err(EventStoreError::storage)?
                 .collect();
-            rows.map_err(|e| EventStoreError::Storage(e.to_string()))
+            rows.map_err(EventStoreError::storage)
         })
         .await
-        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
+        .map_err(|e| EventStoreError::storage_msg(format!("join: {e}")))?
     }
 
     async fn load_by_trace_id(
@@ -97,15 +97,15 @@ impl DomainEventStore for SqliteStore {
                      WHERE trace_id = ?1
                      ORDER BY timestamp ASC",
                 )
-                .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+                .map_err(EventStoreError::storage)?;
             let rows: Result<Vec<EventEnvelope>, rusqlite::Error> = stmt
                 .query_map(rusqlite::params![tid], row_to_envelope)
-                .map_err(|e| EventStoreError::Storage(e.to_string()))?
+                .map_err(EventStoreError::storage)?
                 .collect();
-            rows.map_err(|e| EventStoreError::Storage(e.to_string()))
+            rows.map_err(EventStoreError::storage)
         })
         .await
-        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
+        .map_err(|e| EventStoreError::storage_msg(format!("join: {e}")))?
     }
 
     async fn load_by_time_range(
@@ -127,23 +127,23 @@ impl DomainEventStore for SqliteStore {
                      WHERE timestamp >= ?1 AND timestamp <= ?2
                      ORDER BY timestamp ASC",
                 )
-                .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+                .map_err(EventStoreError::storage)?;
             let rows: Result<Vec<EventEnvelope>, rusqlite::Error> = stmt
                 .query_map(rusqlite::params![from_str, to_str], row_to_envelope)
-                .map_err(|e| EventStoreError::Storage(e.to_string()))?
+                .map_err(EventStoreError::storage)?
                 .collect();
-            rows.map_err(|e| EventStoreError::Storage(e.to_string()))
+            rows.map_err(EventStoreError::storage)
         })
         .await
-        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
+        .map_err(|e| EventStoreError::storage_msg(format!("join: {e}")))?
     }
 
     async fn save_snapshot(&self, snapshot: &Snapshot) -> Result<(), EventStoreError> {
         let aggregate_type = snapshot.aggregate_type.clone();
         let aggregate_id = snapshot.aggregate_id.clone();
         let sequence = snapshot.sequence;
-        let state = serde_json::to_string(&snapshot.state)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?;
+        let state =
+            serde_json::to_string(&snapshot.state).map_err(EventStoreError::serialization)?;
         let timestamp = snapshot.timestamp.to_rfc3339();
 
         self.writer
@@ -156,7 +156,7 @@ impl DomainEventStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+            .map_err(EventStoreError::storage)?;
         Ok(())
     }
 
@@ -180,15 +180,15 @@ impl DomainEventStore for SqliteStore {
                      ORDER BY sequence DESC
                      LIMIT 1",
                 )
-                .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+                .map_err(EventStoreError::storage)?;
             match stmt.query_row(rusqlite::params![agg_type, agg_id], row_to_snapshot) {
                 Ok(snap) => Ok(Some(snap)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                Err(e) => Err(EventStoreError::Storage(e.to_string())),
+                Err(e) => Err(EventStoreError::storage(e)),
             }
         })
         .await
-        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
+        .map_err(|e| EventStoreError::storage_msg(format!("join: {e}")))?
     }
 
     async fn subscribe_after(
@@ -376,18 +376,18 @@ impl SqliteStore {
                  WHERE aggregate_type = ?1 AND aggregate_id = ?2
                    AND sequence > ?3 AND sequence <= ?4
                  ORDER BY sequence ASC",
-            ).map_err(|e| EventStoreError::Storage(e.to_string()))?;
+            ).map_err(EventStoreError::storage)?;
             let rows: Result<Vec<EventEnvelope>, rusqlite::Error> = stmt
                 .query_map(
                     rusqlite::params![agg_type, agg_id, since_exclusive as i64, head_inclusive as i64],
                     row_to_envelope,
                 )
-                .map_err(|e| EventStoreError::Storage(e.to_string()))?
+                .map_err(EventStoreError::storage)?
                 .collect();
-            rows.map_err(|e| EventStoreError::Storage(e.to_string()))
+            rows.map_err(EventStoreError::storage)
         })
         .await
-        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
+        .map_err(|e| EventStoreError::storage_msg(format!("join: {e}")))?
     }
 
     /// Internal helper used by the connector when a `ToolResult` spills to
@@ -494,7 +494,7 @@ async fn run_session_snapshot_task(
     }
     let mut state = if let Some(snap) = latest.as_ref() {
         snap.into_state::<Session>()
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?
+            .map_err(EventStoreError::serialization)?
     } else {
         Session::default_state()
     };
@@ -505,8 +505,8 @@ async fn run_session_snapshot_task(
     for env in &events {
         state = state
             .apply_envelope(env)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?;
-        last_seq = env.sequence;
+            .map_err(EventStoreError::serialization)?;
+        last_seq = env.sequence();
     }
     if last_seq <= last_snap_seq {
         return Ok(());
@@ -515,8 +515,7 @@ async fn run_session_snapshot_task(
         aggregate_type: agg_type.into(),
         aggregate_id: agg_id.into(),
         sequence: last_seq,
-        state: serde_json::to_value(&state)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?,
+        state: serde_json::to_value(&state).map_err(EventStoreError::serialization)?,
         timestamp: Utc::now(),
     };
     store.save_snapshot(&snap).await?;
@@ -541,7 +540,7 @@ fn build_stream(
                 Some(env) => Some((Ok(env), (State::Backfill(iter), listener))),
                 None => loop {
                     match listener.recv().await {
-                        Ok(env) if env.sequence > head_at_subscribe => {
+                        Ok(env) if env.sequence() > head_at_subscribe => {
                             return Some((Ok(env), (State::Live, listener)));
                         }
                         Ok(_) => continue,
@@ -557,7 +556,7 @@ fn build_stream(
             },
             State::Live => loop {
                 match listener.recv().await {
-                    Ok(env) if env.sequence > head_at_subscribe => {
+                    Ok(env) if env.sequence() > head_at_subscribe => {
                         return Some((Ok(env), (State::Live, listener)));
                     }
                     Ok(_) => continue,
@@ -598,11 +597,10 @@ fn row_to_envelope(row: &rusqlite::Row) -> Result<EventEnvelope, rusqlite::Error
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
     })?;
 
-    Ok(EventEnvelope {
+    let mut env = EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
         id: EventId(id),
         aggregate_type: row.get(1)?,
         aggregate_id: row.get(2)?,
-        sequence: sequence as u64,
         event_type: row.get(4)?,
         payload,
         trace_id: TraceId(row.get(6)?),
@@ -610,7 +608,9 @@ fn row_to_envelope(row: &rusqlite::Row) -> Result<EventEnvelope, rusqlite::Error
         timestamp: parse_rfc3339(&timestamp_str)?,
         context_snapshot,
         metadata,
-    })
+    });
+    env.set_sequence(sequence as u64);
+    Ok(env)
 }
 
 fn row_to_snapshot(row: &rusqlite::Row) -> Result<Snapshot, rusqlite::Error> {
@@ -646,11 +646,10 @@ mod tests {
     /// tests-only post-1b — production constructs envelopes with
     /// `sequence: 0` and lets the writer stamp them.
     fn make_envelope(aggregate_type: &str, aggregate_id: &str, sequence: u64) -> EventEnvelope {
-        EventEnvelope {
+        let mut env = EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
             id: EventId::new(),
             aggregate_type: aggregate_type.to_string(),
             aggregate_id: aggregate_id.to_string(),
-            sequence,
             event_type: "test_event".to_string(),
             payload: serde_json::json!({"key": "value"}),
             trace_id: TraceId("trace-1".to_string()),
@@ -658,7 +657,9 @@ mod tests {
             timestamp: Utc::now(),
             context_snapshot: None,
             metadata: HashMap::new(),
-        }
+        });
+        env.set_sequence(sequence);
+        env
     }
 
     #[tokio::test]
@@ -677,7 +678,7 @@ mod tests {
         let events = store.load_events("agent", "a1", 0).await.unwrap();
         assert_eq!(events.len(), 3);
         assert_eq!(
-            events.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+            events.iter().map(|e| e.sequence()).collect::<Vec<_>>(),
             vec![1, 2, 3]
         );
     }
@@ -695,8 +696,8 @@ mod tests {
             .unwrap();
         let events = store.load_events("agent", "a1", 0).await.unwrap();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].sequence, 1);
-        assert_eq!(events[1].sequence, 2);
+        assert_eq!(events[0].sequence(), 1);
+        assert_eq!(events[1].sequence(), 2);
     }
 
     #[tokio::test]
@@ -710,7 +711,7 @@ mod tests {
         }
         let events = store.load_events("agent", "a1", 3).await.unwrap();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].sequence, 4);
+        assert_eq!(events[0].sequence(), 4);
     }
 
     #[tokio::test]
@@ -797,6 +798,6 @@ mod tests {
         assert_eq!(removed, 4); // sequences 1..=4
         let remaining = store.load_events("agent", "a1", 0).await.unwrap();
         assert_eq!(remaining.len(), 6);
-        assert_eq!(remaining[0].sequence, 5);
+        assert_eq!(remaining[0].sequence(), 5);
     }
 }

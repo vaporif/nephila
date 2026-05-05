@@ -16,7 +16,7 @@ nephila-connector = { workspace = true }
 nephila-store = { workspace = true }
 nephila-eventsourcing = { workspace = true }
 ratatui = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["event-stream"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -25,6 +25,7 @@ futures = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

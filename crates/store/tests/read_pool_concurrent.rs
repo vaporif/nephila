@@ -2,7 +2,7 @@
 //! concurrently and stay independent of the writer thread.
 
 use chrono::Utc;
-use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::{EventEnvelope, NewEventEnvelope};
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
@@ -10,11 +10,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 fn env(agg: &str, id: &str) -> EventEnvelope {
-    EventEnvelope {
+    EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: agg.into(),
         aggregate_id: id.into(),
-        sequence: 0,
         event_type: "x".into(),
         payload: serde_json::json!({}),
         trace_id: TraceId("t".into()),
@@ -22,7 +21,7 @@ fn env(agg: &str, id: &str) -> EventEnvelope {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -50,7 +49,7 @@ async fn concurrent_backfill_yields_consistent_results() {
     for set in &all {
         assert_eq!(set.len(), 100);
         assert_eq!(
-            set.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+            set.iter().map(|e| e.sequence()).collect::<Vec<_>>(),
             (1u64..=100).collect::<Vec<_>>()
         );
     }

@@ -126,7 +126,9 @@ Requires Rust edition 2024.
 
 MVP-1 is wired up. Core domain types, SQLite persistence, all 13 MCP tools, the lifecycle manager, and TUI are implemented. The MCP server runs over streamable HTTP via Axum. Agent spawning, token threshold detection, checkpoint save/restore, and HITL are functional. The TUI is keyboard-driven with hotkeys, tree navigation, and modal popups. Goals load from files in a `goals/` directory. Memory and L2 search are handled by ferrex (Qdrant-backed hybrid search + reranking).
 
-What's left: end-to-end integration test for the full checkpoint/reset loop, crash summarizer implementation.
+Session streaming is wired up. Each agent runs one long-lived `claude --input-format stream-json` process whose history is recorded as an event-sourced `Session` aggregate. The TUI has a `SessionPane` that replays from that log on resume; the binary's `SessionRegistry` handles crash detection and respawn via `--resume`. See [ADR-0001](docs/adr/0001-session-as-event-sourced-aggregate.md), [ADR-0002](docs/adr/0002-eventenvelope-sequence-stamping.md), and [docs/specs/2026-05-03-claude-session-streaming-design.md](docs/specs/2026-05-03-claude-session-streaming-design.md).
+
+What's left: end-to-end integration test for the full checkpoint/reset loop, crash summarizer implementation, and removal of the legacy per-turn `claude_code.rs` connector once the embedded pane reaches UX parity.
 
 ## License
 

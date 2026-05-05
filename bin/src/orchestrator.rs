@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use color_eyre::eyre::WrapErr;
 use nephila_connector::{
     ClaudeCodeConnector, ProcessHandle, SpawnConfig, TaskConnector, TaskConnectorKind,
 };
 use nephila_core::agent::{Agent, AgentCommand, AgentEvent, AgentState, SpawnOrigin};
-use nephila_core::command::OrchestratorCommand;
+use nephila_core::command::{ExitOutcome, OrchestratorCommand};
 use nephila_core::config::ConnectorConfig;
 use nephila_core::directive::Directive;
 use nephila_core::event::BusEvent;
@@ -81,8 +82,9 @@ impl Orchestrator {
                     objective_id,
                     content,
                     dir,
+                    restore_checkpoint_id,
                 } => self
-                    .spawn(objective_id, content, dir, None)
+                    .spawn(objective_id, content, dir, None, restore_checkpoint_id)
                     .await
                     .map(|_| ()),
                 OrchestratorCommand::SpawnAgent {
@@ -96,7 +98,7 @@ impl Orchestrator {
                         tracing::warn!(%spawned_by, depth, max = self.max_agent_depth, "spawn rejected: max agent depth exceeded");
                         Ok(())
                     } else {
-                        self.spawn(objective_id, content, dir, Some(spawned_by))
+                        self.spawn(objective_id, content, dir, Some(spawned_by), None)
                             .await
                             .map(|_| ())
                     }
@@ -137,26 +139,9 @@ impl Orchestrator {
                     }
                     _ => Ok(()),
                 },
-                OrchestratorCommand::AgentExited { agent_id, success } => {
-                    self.handle_agent_exited(agent_id, success).await
+                OrchestratorCommand::AgentExited { agent_id, outcome } => {
+                    self.handle_agent_exited(agent_id, outcome).await
                 }
-                OrchestratorCommand::Respawn {
-                    objective_id,
-                    content,
-                    dir,
-                    restore_checkpoint_id,
-                } => match self.spawn(objective_id, content, dir, None).await {
-                    Ok(new_agent_id) => {
-                        if let Some(agent) = self.agents.get_mut(&new_agent_id) {
-                            agent.restore_checkpoint_id = Some(restore_checkpoint_id);
-                            if let Err(e) = AgentStore::save(self.store.as_ref(), agent).await {
-                                tracing::error!(%e, %new_agent_id, "failed to save restore checkpoint");
-                            }
-                        }
-                        Ok(())
-                    }
-                    Err(e) => Err(e),
-                },
             };
 
             if let Err(e) = result {
@@ -173,34 +158,32 @@ impl Orchestrator {
         content: String,
         dir: PathBuf,
         spawned_by: Option<AgentId>,
+        restore_checkpoint_id: Option<nephila_core::id::CheckpointId>,
     ) -> color_eyre::Result<AgentId> {
         let origin = match spawned_by {
             Some(parent) => SpawnOrigin::Agent(parent),
             None => SpawnOrigin::Operator,
         };
-        let agent = Agent::new(
+        let mut agent = Agent::new(
             AgentId::new(),
             objective_id,
             dir.clone(),
             origin,
             Some(content.clone()),
         );
+        agent.restore_checkpoint_id = restore_checkpoint_id;
         let agent_id = agent.id;
 
         self.store.register(agent.clone()).await?;
 
-        let events = agent
-            .handle(AgentCommand::Activate)
-            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let agent = events.iter().fold(agent, |a, e| a.apply_event(e));
+        let events = agent.handle(AgentCommand::Activate)?;
+        let agent = events.iter().fold(agent, Agent::apply_event);
 
         let session_id = uuid::Uuid::new_v4().to_string();
-        let session_events = agent
-            .handle(AgentCommand::SetSession {
-                session_id: session_id.clone(),
-            })
-            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let agent = session_events.iter().fold(agent, |a, e| a.apply_event(e));
+        let session_events = agent.handle(AgentCommand::SetSession {
+            session_id: session_id.clone(),
+        })?;
+        let agent = session_events.iter().fold(agent, Agent::apply_event);
 
         AgentStore::save(self.store.as_ref(), &agent).await?;
         self.publish(&events);
@@ -225,7 +208,7 @@ impl Orchestrator {
         let (_task_handle, process_handle) = connector
             .spawn(agent_id, &spawn_config, &prompt, &session_id)
             .await
-            .map_err(|e| color_eyre::eyre::eyre!("spawn failed: {e}"))?;
+            .wrap_err("connector spawn failed")?;
 
         self.connectors
             .insert(agent_id, TaskConnectorKind::ClaudeCode(connector));
@@ -235,10 +218,9 @@ impl Orchestrator {
         let cmd_tx = self.cmd_tx.clone();
         let watcher_handle = process_handle;
         tokio::spawn(async move {
-            let result = watcher_handle.wait().await;
-            let success = result.is_ok();
+            let outcome = ExitOutcome::from_bool(watcher_handle.wait().await.is_ok());
             let _ = cmd_tx
-                .send(OrchestratorCommand::AgentExited { agent_id, success })
+                .send(OrchestratorCommand::AgentExited { agent_id, outcome })
                 .await;
         });
 
@@ -255,7 +237,7 @@ impl Orchestrator {
     async fn handle_agent_exited(
         &mut self,
         agent_id: AgentId,
-        success: bool,
+        outcome: ExitOutcome,
     ) -> color_eyre::Result<()> {
         let agent = match self.agents.get(&agent_id) {
             Some(a) => a,
@@ -274,7 +256,7 @@ impl Orchestrator {
 
         let cmd = match agent.state {
             AgentState::Suspending => AgentCommand::Kill,
-            AgentState::Active if success => AgentCommand::Complete,
+            AgentState::Active if outcome.is_success() => AgentCommand::Complete,
             _ => AgentCommand::Fail {
                 reason: "process exited unexpectedly".into(),
             },
@@ -291,10 +273,8 @@ impl Orchestrator {
             .get(&agent_id)
             .ok_or_else(|| color_eyre::eyre::eyre!("agent not found: {agent_id}"))?;
 
-        let events = agent
-            .handle(cmd)
-            .map_err(|e| color_eyre::eyre::eyre!("{e}"))?;
-        let agent = events.iter().fold(agent.clone(), |a, e| a.apply_event(e));
+        let events = agent.handle(cmd)?;
+        let agent = events.iter().fold(agent.clone(), Agent::apply_event);
         AgentStore::save(self.store.as_ref(), &agent).await?;
         self.publish(&events);
         self.agents.insert(agent_id, agent);
@@ -433,7 +413,7 @@ mod tests {
 
     fn activate_agent(agent: Agent) -> Agent {
         let events = agent.handle(AgentCommand::Activate).unwrap();
-        events.iter().fold(agent, |a, e| a.apply_event(e))
+        events.iter().fold(agent, Agent::apply_event)
     }
 
     #[tokio::test]
@@ -445,7 +425,7 @@ mod tests {
         agent.objective_id = objective_id;
         let agent = activate_agent(agent);
         let events = agent.handle(AgentCommand::StartSuspending).unwrap();
-        let agent = events.iter().fold(agent, |a, e| a.apply_event(e));
+        let agent = events.iter().fold(agent, Agent::apply_event);
         assert_eq!(agent.state, AgentState::Suspending);
 
         let mut agents = HashMap::new();
@@ -454,7 +434,9 @@ mod tests {
         let mut orch = test_orchestrator(agents);
         orch.store.register(agent).await.unwrap();
 
-        let result = orch.handle_agent_exited(agent_id, true).await;
+        let result = orch
+            .handle_agent_exited(agent_id, ExitOutcome::Success)
+            .await;
         assert!(result.is_ok());
 
         let agent = orch.agents.get(&agent_id).unwrap();
@@ -473,7 +455,9 @@ mod tests {
         let mut orch = test_orchestrator(agents);
         orch.store.register(agent).await.unwrap();
 
-        orch.handle_agent_exited(agent_id, true).await.unwrap();
+        orch.handle_agent_exited(agent_id, ExitOutcome::Success)
+            .await
+            .unwrap();
 
         let agent = orch.agents.get(&agent_id).unwrap();
         assert_eq!(agent.state, AgentState::Completed);
@@ -490,7 +474,9 @@ mod tests {
         let mut orch = test_orchestrator(agents);
         orch.store.register(agent).await.unwrap();
 
-        orch.handle_agent_exited(agent_id, false).await.unwrap();
+        orch.handle_agent_exited(agent_id, ExitOutcome::Failure)
+            .await
+            .unwrap();
 
         let agent = orch.agents.get(&agent_id).unwrap();
         assert_eq!(agent.state, AgentState::Failed);
@@ -499,7 +485,9 @@ mod tests {
     #[tokio::test]
     async fn agent_exited_unknown_agent_is_ok() {
         let mut orch = test_orchestrator(HashMap::new());
-        let result = orch.handle_agent_exited(AgentId::new(), true).await;
+        let result = orch
+            .handle_agent_exited(AgentId::new(), ExitOutcome::Success)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -508,7 +496,7 @@ mod tests {
         let agent_id = AgentId::new();
         let agent = activate_agent(make_agent(agent_id, None));
         let events = agent.handle(AgentCommand::Complete).unwrap();
-        let agent = events.iter().fold(agent, |a, e| a.apply_event(e));
+        let agent = events.iter().fold(agent, Agent::apply_event);
         assert_eq!(agent.state, AgentState::Completed);
 
         let mut agents = HashMap::new();
@@ -517,7 +505,9 @@ mod tests {
         let mut orch = test_orchestrator(agents);
         orch.store.register(agent).await.unwrap();
 
-        orch.handle_agent_exited(agent_id, false).await.unwrap();
+        orch.handle_agent_exited(agent_id, ExitOutcome::Failure)
+            .await
+            .unwrap();
         // State should remain Completed (no-op)
         assert_eq!(
             orch.agents.get(&agent_id).unwrap().state,

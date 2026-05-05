@@ -80,22 +80,28 @@ impl LifecycleSupervisor {
         tracker.report(used, remaining);
 
         if tracker.should_force_kill() {
-            let _ = self
+            if let Err(e) = self
                 .cmd_tx
                 .send(OrchestratorCommand::TokenThreshold {
                     agent_id,
                     directive: Directive::Abort,
                 })
-                .await;
+                .await
+            {
+                tracing::error!(%agent_id, %e, "failed to dispatch Abort directive");
+            }
         } else if tracker.should_prepare_reset() {
             tracker.mark_drain_started();
-            let _ = self
+            if let Err(e) = self
                 .cmd_tx
                 .send(OrchestratorCommand::TokenThreshold {
                     agent_id,
                     directive: Directive::PrepareReset,
                 })
-                .await;
+                .await
+            {
+                tracing::error!(%agent_id, %e, "failed to dispatch PrepareReset directive");
+            }
         }
     }
 
@@ -114,9 +120,8 @@ impl LifecycleSupervisor {
             }
         };
 
-        let checkpoint_id = match agent.checkpoint_id {
-            Some(id) => id,
-            None => return,
+        let Some(checkpoint_id) = agent.checkpoint_id else {
+            return;
         };
 
         let tracker = self
@@ -135,15 +140,18 @@ impl LifecycleSupervisor {
 
         let content = agent.injected_message.unwrap_or_default();
 
-        let _ = self
+        if let Err(e) = self
             .cmd_tx
-            .send(OrchestratorCommand::Respawn {
+            .send(OrchestratorCommand::Spawn {
                 objective_id: agent.objective_id,
                 content,
                 dir: agent.directory,
-                restore_checkpoint_id: checkpoint_id,
+                restore_checkpoint_id: Some(checkpoint_id),
             })
-            .await;
+            .await
+        {
+            tracing::error!(%agent_id, %e, "failed to dispatch respawn");
+        }
     }
 
     pub async fn handle_agent_session_ready(&mut self, agent_id: AgentId) {
@@ -406,15 +414,15 @@ mod tests {
 
         let cmd = cmd_rx.try_recv().expect("should have sent respawn");
         match cmd {
-            OrchestratorCommand::Respawn {
+            OrchestratorCommand::Spawn {
                 objective_id: oid,
-                restore_checkpoint_id: cpid,
+                restore_checkpoint_id: Some(cpid),
                 ..
             } => {
                 assert_eq!(oid, objective_id);
                 assert_eq!(cpid, checkpoint_id);
             }
-            other => panic!("expected Respawn, got {other:?}"),
+            other => panic!("expected Spawn(restore_checkpoint_id=Some), got {other:?}"),
         }
     }
 

@@ -10,7 +10,7 @@
 //! perspective.
 
 use chrono::Utc;
-use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::{EventEnvelope, NewEventEnvelope};
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
@@ -19,11 +19,10 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 fn env(agg: &str, id: &str) -> EventEnvelope {
-    EventEnvelope {
+    EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: agg.into(),
         aggregate_id: id.into(),
-        sequence: 0,
         event_type: "x".into(),
         payload: serde_json::json!({}),
         trace_id: TraceId("t".into()),
@@ -31,7 +30,7 @@ fn env(agg: &str, id: &str) -> EventEnvelope {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    })
 }
 
 #[tokio::test]
@@ -89,7 +88,7 @@ async fn cache_rolls_back_on_commit_failure() {
     let all = store.load_events("agent", "a1", 0).await.unwrap();
     assert_eq!(all.len(), 6);
     assert_eq!(
-        all.iter().map(|e| e.sequence).collect::<Vec<_>>(),
+        all.iter().map(|e| e.sequence()).collect::<Vec<_>>(),
         vec![1, 2, 3, 4, 5, 6],
     );
 }

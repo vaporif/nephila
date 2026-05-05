@@ -12,7 +12,7 @@ use chrono::Utc;
 use nephila_core::id::AgentId;
 use nephila_core::session::{Session, SessionPhase};
 use nephila_core::session_event::SessionEvent;
-use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::{EventEnvelope, NewEventEnvelope};
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
@@ -21,11 +21,10 @@ use std::time::Duration;
 use uuid::Uuid;
 
 fn env(event: &SessionEvent, agg_id: &str) -> EventEnvelope {
-    EventEnvelope {
+    EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".into(),
         aggregate_id: agg_id.into(),
-        sequence: 0,
         event_type: event.kind().into(),
         payload: serde_json::to_value(event).unwrap(),
         trace_id: TraceId("t".into()),
@@ -33,7 +32,7 @@ fn env(event: &SessionEvent, agg_id: &str) -> EventEnvelope {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    })
 }
 
 fn started(session_id: Uuid, agent_id: AgentId) -> SessionEvent {

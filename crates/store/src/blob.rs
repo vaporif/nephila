@@ -89,10 +89,9 @@ pub fn prepare_blob(bytes: &[u8]) -> PreparedBlob {
     let original_len = bytes.len() as u64;
     let cap = bytes.len().min(8 * 1024);
     // Walk back from `cap` to a UTF-8 boundary so the snippet is decodable.
-    let snippet_end = (0..=cap)
-        .rev()
-        .find(|&i| std::str::from_utf8(&bytes[..i]).is_ok())
-        .unwrap_or(0);
+    // `Utf8Error::valid_up_to` yields the boundary in O(n) instead of the
+    // O(n^2) reverse scan that re-validates the prefix on every step.
+    let snippet_end = std::str::from_utf8(&bytes[..cap]).map_or_else(|e| e.valid_up_to(), |_| cap);
     let snippet = String::from_utf8_lossy(&bytes[..snippet_end]).into_owned();
     PreparedBlob {
         hash,

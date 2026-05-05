@@ -145,19 +145,20 @@ async fn respawn_replaces_handle_after_crash() {
         exit_code: Some(1),
         ts: chrono::Utc::now(),
     };
-    let env = nephila_eventsourcing::envelope::EventEnvelope {
-        id: nephila_eventsourcing::id::EventId::new(),
-        aggregate_type: "session".to_owned(),
-        aggregate_id: session_id.to_string(),
-        sequence: 0,
-        event_type: "session_crashed".to_owned(),
-        payload: serde_json::to_value(&crashed).expect("payload"),
-        trace_id: nephila_eventsourcing::id::TraceId(session_id.to_string()),
-        outcome: None,
-        timestamp: chrono::Utc::now(),
-        context_snapshot: None,
-        metadata: Default::default(),
-    };
+    let env = nephila_eventsourcing::envelope::EventEnvelope::new(
+        nephila_eventsourcing::envelope::NewEventEnvelope {
+            id: nephila_eventsourcing::id::EventId::new(),
+            aggregate_type: "session".to_owned(),
+            aggregate_id: session_id.to_string(),
+            event_type: "session_crashed".to_owned(),
+            payload: serde_json::to_value(&crashed).expect("payload"),
+            trace_id: nephila_eventsourcing::id::TraceId(session_id.to_string()),
+            outcome: None,
+            timestamp: chrono::Utc::now(),
+            context_snapshot: None,
+            metadata: Default::default(),
+        },
+    );
     store.append_batch(vec![env]).await.expect("append crash");
 
     // Wait until a respawn lands a NEW handle (or original is removed).
@@ -286,19 +287,20 @@ async fn crash_watch_recovers_session_crashed_after_broadcast_lag() {
     };
     let payload = serde_json::to_value(&noop).expect("payload");
     for _ in 0..4500u64 {
-        envelopes.push(EventEnvelope {
-            id: EventId::new(),
-            aggregate_type: "session".to_owned(),
-            aggregate_id: session_id.to_string(),
-            sequence: 0,
-            event_type: "human_prompt_queued".to_owned(),
-            payload: payload.clone(),
-            trace_id: TraceId(session_id.to_string()),
-            outcome: None,
-            timestamp: chrono::Utc::now(),
-            context_snapshot: None,
-            metadata: Default::default(),
-        });
+        envelopes.push(EventEnvelope::new(
+            nephila_eventsourcing::envelope::NewEventEnvelope {
+                id: EventId::new(),
+                aggregate_type: "session".to_owned(),
+                aggregate_id: session_id.to_string(),
+                event_type: "human_prompt_queued".to_owned(),
+                payload: payload.clone(),
+                trace_id: TraceId(session_id.to_string()),
+                outcome: None,
+                timestamp: chrono::Utc::now(),
+                context_snapshot: None,
+                metadata: Default::default(),
+            },
+        ));
     }
     store.append_batch(envelopes).await.expect("append batch");
 
@@ -309,11 +311,10 @@ async fn crash_watch_recovers_session_crashed_after_broadcast_lag() {
         exit_code: Some(1),
         ts: chrono::Utc::now(),
     };
-    let crash_env = EventEnvelope {
+    let crash_env = EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".to_owned(),
         aggregate_id: session_id.to_string(),
-        sequence: 0,
         event_type: "session_crashed".to_owned(),
         payload: serde_json::to_value(&crashed).expect("payload"),
         trace_id: TraceId(session_id.to_string()),
@@ -321,7 +322,7 @@ async fn crash_watch_recovers_session_crashed_after_broadcast_lag() {
         timestamp: chrono::Utc::now(),
         context_snapshot: None,
         metadata: Default::default(),
-    };
+    });
     store
         .append_batch(vec![crash_env])
         .await
@@ -358,7 +359,7 @@ async fn double_fallback_only_respawns_once() {
     let session_id = Uuid::new_v4();
     registry.bind_session_id_for_test(agent_id, session_id);
     // Materialise the respawn_states entry so both callers race the SAME mutex.
-    registry.materialize_respawn_state_for_test(agent_id).await;
+    registry.materialize_respawn_state_for_test(agent_id);
 
     // Fire fallback twice. tokio::join polls them in order; with the lock
     // released across resume(), the second call observes in_flight=true.

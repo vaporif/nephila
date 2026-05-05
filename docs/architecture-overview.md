@@ -1,8 +1,11 @@
 # Nephila: Architecture Overview & Design Rationale
 
-**Date:** 2026-03-29
+**Date:** 2026-03-29 (foundational design)
+**Last addendum:** 2026-05-05 (session streaming)
 
 This document captures the full context behind Nephila's design — the problem, the research, the decisions made and why, the alternatives rejected, and the inspirations drawn from existing systems. The companion spec (`docs/superpowers/specs/2026-03-29-nephila-design.md`) is the implementation reference; this document is the story behind it.
+
+> **Addendum (2026-05-05): session streaming.** The original design assumed a per-turn `claude -p` subprocess. We now run one long-lived `claude --input-format stream-json` process per agent, with its session modelled as an event-sourced aggregate (`Session`, the second `EventSourced` impl after `Agent`). The TUI gained an embedded `SessionPane` that subscribes to the durable event log; the binary's `SessionRegistry` handles crash detection and `--resume`. The decisions below — single binary, sidecar tools, flat ownership, layered checkpoints, SQLite default, Claude-summarises — are unchanged. The new shape is documented in [ADR-0001](adr/0001-session-as-event-sourced-aggregate.md), [ADR-0002](adr/0002-eventenvelope-sequence-stamping.md), and `docs/specs/2026-05-03-claude-session-streaming-design.md`.
 
 ---
 

@@ -16,15 +16,28 @@ use nephila_core::config::SupervisionConfig;
 /// session.
 #[derive(Debug)]
 pub struct RestartTracker {
-    config: SupervisionConfig,
+    window: Duration,
+    max_restarts: usize,
     timestamps: VecDeque<Instant>,
 }
 
 impl RestartTracker {
+    #[must_use]
     pub fn new(config: SupervisionConfig) -> Self {
         Self {
-            config,
+            window: Duration::from_secs(config.restart_window_secs),
+            max_restarts: config.max_restarts as usize,
             timestamps: VecDeque::new(),
+        }
+    }
+
+    fn prune_window(&mut self, now: Instant) {
+        while let Some(&front) = self.timestamps.front() {
+            if now.duration_since(front) > self.window {
+                self.timestamps.pop_front();
+            } else {
+                break;
+            }
         }
     }
 
@@ -32,17 +45,9 @@ impl RestartTracker {
     /// configured limit), `false` if the limit has been exceeded.
     pub fn record_restart(&mut self) -> bool {
         let now = Instant::now();
-        let window = Duration::from_secs(self.config.restart_window_secs);
+        self.prune_window(now);
 
-        while let Some(&front) = self.timestamps.front() {
-            if now.duration_since(front) > window {
-                self.timestamps.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        if self.timestamps.len() >= self.config.max_restarts as usize {
+        if self.timestamps.len() >= self.max_restarts {
             return false;
         }
 
@@ -58,6 +63,7 @@ impl RestartTracker {
         self.timestamps.clear();
     }
 
+    #[must_use]
     pub fn restart_count(&self) -> usize {
         self.timestamps.len()
     }

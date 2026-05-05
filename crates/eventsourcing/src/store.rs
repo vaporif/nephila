@@ -5,12 +5,18 @@ use crate::tracing::StoredSpan;
 use chrono::{DateTime, Utc};
 use std::pin::Pin;
 
+pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct PlainMsg(String);
+
 #[derive(Debug, thiserror::Error)]
 pub enum EventStoreError {
     #[error("storage error: {0}")]
-    Storage(String),
+    Storage(#[source] BoxError),
     #[error("serialization error: {0}")]
-    Serialization(String),
+    Serialization(#[source] BoxError),
     #[error("concurrency conflict: {0}")]
     ConcurrencyConflict(String),
     /// Surfaced from a live subscription when the broadcast channel dropped
@@ -28,6 +34,18 @@ pub enum EventStoreError {
     PoolExhausted,
 }
 
+impl EventStoreError {
+    pub fn storage<E: std::error::Error + Send + Sync + 'static>(e: E) -> Self {
+        Self::Storage(Box::new(e))
+    }
+    pub fn storage_msg(msg: impl Into<String>) -> Self {
+        Self::Storage(Box::new(PlainMsg(msg.into())))
+    }
+    pub fn serialization<E: std::error::Error + Send + Sync + 'static>(e: E) -> Self {
+        Self::Serialization(Box::new(e))
+    }
+}
+
 /// Stream item produced by [`DomainEventStore::subscribe_after`]. Each yielded
 /// `Result` is either a fresh envelope from backfill+live merge or a
 /// transient error (`Lagged` is the most common, signalling broadcast overflow).
@@ -37,9 +55,18 @@ pub type EventStream =
 #[derive(Debug, thiserror::Error)]
 pub enum TracingStoreError {
     #[error("storage error: {0}")]
-    Storage(String),
+    Storage(#[source] BoxError),
     #[error("serialization error: {0}")]
-    Serialization(String),
+    Serialization(#[source] BoxError),
+}
+
+impl TracingStoreError {
+    pub fn storage<E: std::error::Error + Send + Sync + 'static>(e: E) -> Self {
+        Self::Storage(Box::new(e))
+    }
+    pub fn serialization<E: std::error::Error + Send + Sync + 'static>(e: E) -> Self {
+        Self::Serialization(Box::new(e))
+    }
 }
 
 pub trait DomainEventStore: Send + Sync {

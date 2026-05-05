@@ -12,7 +12,9 @@ use nephila_core::config::NephilaConfig;
 use nephila_core::event::BusEvent;
 use nephila_core::id::AgentId;
 use nephila_mcp::state::HitlRequest;
+use nephila_tui::tui_tracing::TuiLogBuffer;
 use tokio::sync::{RwLock, broadcast, mpsc};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -27,7 +29,7 @@ struct Cli {
     #[arg(short, long, default_value = "nephila.toml")]
     config: PathBuf,
 
-    /// Override SQLite database path
+    /// Override `SQLite` database path
     #[arg(long)]
     db: Option<PathBuf>,
 
@@ -36,29 +38,37 @@ struct Cli {
     headless: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    color_eyre::install()?;
-    let cli = Cli::parse();
+enum Mode {
+    Headless,
+    Tui { tui_log: TuiLogBuffer },
+}
 
+fn install_tracing(headless: bool) -> Mode {
     let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "nephila=debug".into());
 
-    let tui_log = if cli.headless {
+    if headless {
         tracing_subscriber::registry()
             .with(env_filter)
             .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
             .init();
-        None
+        Mode::Headless
     } else {
-        let tui_log = nephila_tui::tui_tracing::TuiLogBuffer::new();
+        let tui_log = TuiLogBuffer::new();
         let tui_layer = nephila_tui::tui_tracing::TuiTracingLayer::new(tui_log.clone());
         tracing_subscriber::registry()
             .with(env_filter)
             .with(tui_layer)
             .init();
-        Some(tui_log)
-    };
+        Mode::Tui { tui_log }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    color_eyre::install()?;
+    let cli = Cli::parse();
+    let mode = install_tracing(cli.headless);
 
     let config_str = std::fs::read_to_string(&cli.config).unwrap_or_else(|_| {
         tracing::warn!("Config file not found, using defaults");
@@ -78,12 +88,12 @@ async fn main() -> Result<()> {
     // nephila against the same workdir errors out at boot.
     let workdir = std::env::current_dir().wrap_err("read current dir for workdir lock")?;
     let _workdir_lock = nephila_store::lockfile::WorkdirLock::acquire(&workdir)
-        .map_err(|e| color_eyre::eyre::eyre!("another nephila is already running here: {e}"))?;
+        .wrap_err("another nephila is already running here")?;
 
     let ferrex_config = build_ferrex_config(&config)?;
     let memory_service = ferrex_core::MemoryService::from_config(ferrex_config)
         .await
-        .map_err(|e| color_eyre::eyre::eyre!("ferrex init: {e}"))?;
+        .wrap_err("ferrex init")?;
 
     let sqlite_store = Arc::new(
         nephila_store::SqliteStore::open(
@@ -101,7 +111,7 @@ async fn main() -> Result<()> {
             "nephila",
         )
         .await
-        .map_err(|e| color_eyre::eyre::eyre!("ferrex store init: {e}"))?,
+        .wrap_err("ferrex store init")?,
     );
 
     let (event_tx, event_rx) = broadcast::channel::<BusEvent>(1024);
@@ -113,11 +123,11 @@ async fn main() -> Result<()> {
     let cancellation_token = CancellationToken::new();
 
     let (mcp_handle, bound_addr) = nephila_mcp::http::serve(
-        sqlite_store.clone(),
-        ferrex_store.clone(),
+        Arc::clone(&sqlite_store),
+        Arc::clone(&ferrex_store),
         event_tx.clone(),
         cmd_tx.clone(),
-        hitl_requests.clone(),
+        Arc::clone(&hitl_requests),
         config.clone(),
         cancellation_token.clone(),
     )
@@ -126,15 +136,17 @@ async fn main() -> Result<()> {
 
     tracing::info!(%bound_addr, "MCP server listening");
 
-    let cmd_handle = {
-        let store = sqlite_store.clone();
+    let mut tasks: JoinSet<()> = JoinSet::new();
+
+    {
+        let store = Arc::clone(&sqlite_store);
         let event_tx = event_tx.clone();
-        let hitl_requests = hitl_requests.clone();
+        let hitl_requests = Arc::clone(&hitl_requests);
         let max_agent_depth = config.supervision.max_agent_depth;
         let connector_config = config.connector.clone();
         let mcp_endpoint = format!("http://{bound_addr}/mcp");
         let cmd_tx_clone = cmd_tx.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             match orchestrator::Orchestrator::load(
                 store,
                 event_tx,
@@ -149,16 +161,16 @@ async fn main() -> Result<()> {
                 Ok(mut orch) => orch.run(cmd_rx).await,
                 Err(e) => tracing::error!(%e, "failed to load orchestrator"),
             }
-        })
-    };
+        });
+    }
 
-    let lifecycle_handle = {
+    {
         let event_rx = event_tx.subscribe();
         let cmd_tx = cmd_tx.clone();
-        let store = sqlite_store.clone();
+        let store = Arc::clone(&sqlite_store);
         let lifecycle_config = config.lifecycle;
         let supervision_config = config.supervision.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let mut supervisor = nephila_lifecycle::LifecycleSupervisor::new(
                 event_rx,
                 cmd_tx,
@@ -167,8 +179,8 @@ async fn main() -> Result<()> {
                 supervision_config,
             );
             supervisor.run().await;
-        })
-    };
+        });
+    }
 
     // Stand up the session-event-driven supervisor alongside the legacy
     // `BusEvent`-driven one. The registry owns sessions, watches for crashes
@@ -182,15 +194,14 @@ async fn main() -> Result<()> {
         permission_mode: "bypassPermissions".into(),
     };
     let session_registry = Arc::new(session_registry::SessionRegistry::new(
-        sqlite_store.clone(),
+        Arc::clone(&sqlite_store),
         blob_reader,
         registry_defaults,
     ));
     // Wire the connector's crash-fallback channel into `on_crash` before any session
     // can produce events — otherwise an `on_startup` resume that crashes immediately
     // would push into the bounded fallback channel with no listener draining it.
-    let _crash_fallback_handle = session_registry
-        .clone()
+    let _crash_fallback_handle = Arc::clone(&session_registry)
         .start_crash_fallback_listener()
         .await;
     // Resume any agents in an active phase from a previous orchestrator run.
@@ -198,12 +209,15 @@ async fn main() -> Result<()> {
         tracing::warn!(%e, "SessionRegistry::on_startup failed");
     }
     let session_supervisor = Arc::new(tokio::sync::Mutex::new(
-        nephila_lifecycle::SessionSupervisor::new(sqlite_store.clone(), config.supervision.clone()),
+        nephila_lifecycle::SessionSupervisor::new(
+            Arc::clone(&sqlite_store),
+            config.supervision.clone(),
+        ),
     ));
-    let session_supervisor_handle = {
-        let registry = session_registry.clone();
-        let _supervisor = session_supervisor.clone();
-        tokio::spawn(async move {
+    {
+        let registry = Arc::clone(&session_registry);
+        let _supervisor = Arc::clone(&session_supervisor);
+        tasks.spawn(async move {
             let mut new_agents_rx = registry.subscribe_session_started();
             loop {
                 match new_agents_rx.recv().await {
@@ -221,36 +235,36 @@ async fn main() -> Result<()> {
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
-        })
-    };
+        });
+    }
 
-    if cli.headless {
-        tracing::info!("Running in headless mode, press Ctrl+C to stop");
-        tokio::signal::ctrl_c()
-            .await
-            .wrap_err("failed to listen for Ctrl+C")?;
-    } else {
-        let tui_log = tui_log.expect("tui_log must be Some in TUI mode");
-        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-        let mut terminal = ratatui::init();
-        let mut app = nephila_tui::App::new(
-            event_rx,
-            cmd_tx,
-            working_dir,
-            tui_log,
-            config.connector.claude_binary.clone(),
-        );
-        let tui_result = app.run(&mut terminal).await;
-        ratatui::restore();
-        tui_result?;
+    match mode {
+        Mode::Headless => {
+            tracing::info!("Running in headless mode, press Ctrl+C to stop");
+            tokio::signal::ctrl_c()
+                .await
+                .wrap_err("failed to listen for Ctrl+C")?;
+        }
+        Mode::Tui { tui_log } => {
+            let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let mut terminal = ratatui::init();
+            let mut app = nephila_tui::App::new(
+                event_rx,
+                cmd_tx,
+                working_dir,
+                tui_log,
+                config.connector.claude_binary.clone(),
+            );
+            let tui_result = app.run(&mut terminal).await;
+            ratatui::restore();
+            tui_result?;
+        }
     }
 
     tracing::info!("Shutting down...");
     let _ = event_tx.send(BusEvent::Shutdown);
     cancellation_token.cancel();
-    cmd_handle.abort();
-    lifecycle_handle.abort();
-    session_supervisor_handle.abort();
+    tasks.shutdown().await;
     let _ = mcp_handle.await;
 
     Ok(())
@@ -269,8 +283,8 @@ fn build_ferrex_config(config: &NephilaConfig) -> Result<ferrex_core::FerrexConf
         .clone()
         .unwrap_or_else(|| ferrex_dir.join("ferrex.toml"));
 
-    let loaded = ferrex_core::load_or_init(&config_path, FERREX_BASELINE)
-        .map_err(|e| color_eyre::eyre::eyre!("ferrex config: {e}"))?;
+    let loaded =
+        ferrex_core::load_or_init(&config_path, FERREX_BASELINE).wrap_err("ferrex config")?;
 
     Ok(ferrex_core::FerrexConfig {
         qdrant_url: None,

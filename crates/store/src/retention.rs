@@ -40,15 +40,14 @@ where
     let mut last_seq = 0u64;
     for env in &events {
         state = <EventEnvelope as ApplyEnvelope<A>>::apply(env, state)?;
-        last_seq = env.sequence;
+        last_seq = env.sequence();
     }
 
     let snap = Snapshot {
         aggregate_type: agg_type.into(),
         aggregate_id: aggregate_id.into(),
         sequence: last_seq,
-        state: serde_json::to_value(&state)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))?,
+        state: serde_json::to_value(&state).map_err(EventStoreError::serialization)?,
         timestamp: Utc::now(),
     };
     store.save_snapshot(&snap).await?;
@@ -80,7 +79,7 @@ impl ApplyEnvelope<nephila_core::session::Session> for EventEnvelope {
     ) -> Result<nephila_core::session::Session, EventStoreError> {
         state
             .apply_envelope(env)
-            .map_err(|e| EventStoreError::Serialization(e.to_string()))
+            .map_err(EventStoreError::serialization)
     }
 }
 
@@ -96,11 +95,10 @@ mod tests {
     use uuid::Uuid;
 
     fn envelope(event: &SessionEvent, agg_id: &str) -> EventEnvelope {
-        EventEnvelope {
+        EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
             id: EventId::new(),
             aggregate_type: "session".into(),
             aggregate_id: agg_id.into(),
-            sequence: 0,
             event_type: event.kind().into(),
             payload: serde_json::to_value(event).unwrap(),
             trace_id: TraceId("t".into()),
@@ -108,7 +106,7 @@ mod tests {
             timestamp: Utc::now(),
             context_snapshot: None,
             metadata: HashMap::new(),
-        }
+        })
     }
 
     #[tokio::test]
@@ -153,7 +151,7 @@ mod tests {
 
         let remaining = store.load_events("session", &agg_id, 0).await.unwrap();
         assert_eq!(remaining.len() as u64, RETENTION_TAIL);
-        assert_eq!(remaining[0].sequence, 1000 - RETENTION_TAIL + 1);
-        assert_eq!(remaining.last().unwrap().sequence, 1000);
+        assert_eq!(remaining[0].sequence(), 1000 - RETENTION_TAIL + 1);
+        assert_eq!(remaining.last().unwrap().sequence(), 1000);
     }
 }

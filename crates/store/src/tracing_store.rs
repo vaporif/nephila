@@ -12,18 +12,17 @@ impl nephila_eventsourcing::store::TracingStore for SqliteStore {
         let trace_id = span.trace_id.0.clone();
         let parent_span_id = span.parent_span_id.as_ref().map(|s| s.0.clone());
         let name = span.name.clone();
-        let level = serde_json::to_string(&span.level)
-            .map_err(|e| TracingStoreError::Serialization(e.to_string()))?;
+        let level = serde_json::to_string(&span.level).map_err(TracingStoreError::serialization)?;
         let target = span.target.clone();
         let start_time = span.start_time.to_rfc3339();
         let end_time = span.end_time.map(|t| t.to_rfc3339());
         let duration_us = span.duration_us.map(|d| d as i64);
-        let attributes = serde_json::to_string(&span.attributes)
-            .map_err(|e| TracingStoreError::Serialization(e.to_string()))?;
-        let events = serde_json::to_string(&span.events)
-            .map_err(|e| TracingStoreError::Serialization(e.to_string()))?;
-        let status = serde_json::to_string(&span.status)
-            .map_err(|e| TracingStoreError::Serialization(e.to_string()))?;
+        let attributes =
+            serde_json::to_string(&span.attributes).map_err(TracingStoreError::serialization)?;
+        let events =
+            serde_json::to_string(&span.events).map_err(TracingStoreError::serialization)?;
+        let status =
+            serde_json::to_string(&span.status).map_err(TracingStoreError::serialization)?;
 
         self.writer
             .execute(move |conn| {
@@ -48,7 +47,7 @@ impl nephila_eventsourcing::store::TracingStore for SqliteStore {
                 Ok(())
             })
             .await
-            .map_err(|e| TracingStoreError::Storage(e.to_string()))?;
+            .map_err(TracingStoreError::storage)?;
         Ok(())
     }
 
@@ -72,7 +71,7 @@ impl nephila_eventsourcing::store::TracingStore for SqliteStore {
                 Ok(rows)
             })
             .await
-            .map_err(|e| TracingStoreError::Storage(e.to_string()))?;
+            .map_err(TracingStoreError::storage)?;
         Ok(spans)
     }
 
@@ -98,7 +97,7 @@ impl nephila_eventsourcing::store::TracingStore for SqliteStore {
                 Ok(rows)
             })
             .await
-            .map_err(|e| TracingStoreError::Storage(e.to_string()))?;
+            .map_err(TracingStoreError::storage)?;
         Ok(spans)
     }
 
@@ -122,7 +121,7 @@ impl nephila_eventsourcing::store::TracingStore for SqliteStore {
                 Ok(rows)
             })
             .await
-            .map_err(|e| TracingStoreError::Storage(e.to_string()))?;
+            .map_err(TracingStoreError::storage)?;
         Ok(spans)
     }
 }

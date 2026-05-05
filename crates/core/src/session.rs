@@ -4,6 +4,11 @@ use nephila_eventsourcing::aggregate::EventSourced;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Claude Code emits `stop_reason: "interrupt"` on TurnCompleted when the
+/// session was paused/interrupted mid-turn. Used to distinguish a clean
+/// `end_turn` from an interrupt-driven stop.
+const STOP_REASON_INTERRUPT: &str = "interrupt";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionPhase {
@@ -60,7 +65,7 @@ impl Session {
         let event: SessionEvent = serde_json::from_value(env.payload.clone())
             .map_err(|e| SessionError::Invariant(format!("payload decode: {e}")))?;
         let mut next = self.apply(&event);
-        next.last_seq = env.sequence;
+        next.last_seq = env.sequence();
         Ok(next)
     }
 }
@@ -148,7 +153,7 @@ impl EventSourced for Session {
                 if self.open_turn == Some(*turn_id) {
                     self.open_turn = None;
                 }
-                if stop_reason == "interrupt" {
+                if stop_reason == STOP_REASON_INTERRUPT {
                     self.phase = SessionPhase::Paused;
                 } else if matches!(self.phase, SessionPhase::WaitingHitl) {
                     // stays in WaitingHitl until operator answers

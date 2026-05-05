@@ -1,9 +1,15 @@
 # 0002. EventEnvelope sequence stamping
 
 Date: 2026-05-04
-Status: accepted
+Status: superseded by ADR-0003 (2026-05-05)
 Spec: `docs/specs/2026-05-03-claude-session-streaming-design.md`
 Plan: `docs/plans/2026-05-03-claude-session-streaming.md` (Task 3 step 4)
+
+> **Superseded.** ADR-0003 keeps the writer-stamps-sequence design but replaces
+> the runtime invariant (`sequence: u64` + `debug_assert!`) with a compile-time
+> one (private field + `EventEnvelope::new` constructor + writer-only
+> `set_sequence`). The "writer continues from MAX" behavior on reads is
+> unchanged.
 
 ## Context
 

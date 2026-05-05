@@ -12,7 +12,7 @@
 
 use chrono::Utc;
 use futures::StreamExt;
-use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::{EventEnvelope, NewEventEnvelope};
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::{DomainEventStore, EventStoreError};
 use nephila_store::SqliteStore;
@@ -22,11 +22,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 fn env(payload_text: &str) -> EventEnvelope {
-    EventEnvelope {
+    EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".into(),
         aggregate_id: "s1".into(),
-        sequence: 0,
         event_type: "x".into(),
         payload: serde_json::json!({"text": payload_text}),
         trace_id: TraceId("t".into()),
@@ -34,7 +33,7 @@ fn env(payload_text: &str) -> EventEnvelope {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -97,7 +96,7 @@ async fn listener_attached_before_head_snapshot_does_not_lose_concurrent_appends
         while seen_seqs.len() < 4 {
             match stream.next().await {
                 Some(Ok(env)) => {
-                    seen_seqs.push(env.sequence);
+                    seen_seqs.push(env.sequence());
                     let text = env.payload["text"].as_str().unwrap_or("").to_string();
                     seen_texts.push(text);
                 }

@@ -120,6 +120,7 @@ impl AsyncTool<NephilaMcpServer> for ForkAgentTool {
                 objective_id: sub_obj_id,
                 content: format!("Fork: {}", params.branch_label),
                 dir: source_agent.directory,
+                restore_checkpoint_id: None,
             })
             .await;
 

@@ -2,11 +2,36 @@ use crate::directive::Directive;
 use crate::id::{AgentId, CheckpointId, ObjectiveId};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitOutcome {
+    Success,
+    Failure,
+}
+
+impl ExitOutcome {
+    #[must_use]
+    pub fn from_bool(success: bool) -> Self {
+        if success {
+            Self::Success
+        } else {
+            Self::Failure
+        }
+    }
+
+    #[must_use]
+    pub fn is_success(self) -> bool {
+        matches!(self, Self::Success)
+    }
+}
+
 pub enum OrchestratorCommand {
     Spawn {
         objective_id: ObjectiveId,
         content: String,
         dir: PathBuf,
+        /// Set when respawning after a crash to seed the new agent's
+        /// `restore_checkpoint_id` from a previous session.
+        restore_checkpoint_id: Option<CheckpointId>,
     },
     SpawnAgent {
         objective_id: ObjectiveId,
@@ -36,13 +61,7 @@ pub enum OrchestratorCommand {
     },
     AgentExited {
         agent_id: AgentId,
-        success: bool,
-    },
-    Respawn {
-        objective_id: ObjectiveId,
-        content: String,
-        dir: PathBuf,
-        restore_checkpoint_id: CheckpointId,
+        outcome: ExitOutcome,
     },
 }
 
@@ -57,6 +76,7 @@ impl std::fmt::Debug for OrchestratorCommand {
                 objective_id,
                 content,
                 dir,
+                restore_checkpoint_id,
             } => f
                 .debug_struct("Spawn")
                 .field("objective_id", objective_id)
@@ -65,6 +85,7 @@ impl std::fmt::Debug for OrchestratorCommand {
                     &format_args!("<redacted: {} bytes>", content.len()),
                 )
                 .field("dir", dir)
+                .field("restore_checkpoint_id", restore_checkpoint_id)
                 .finish(),
             Self::SpawnAgent {
                 objective_id,
@@ -109,25 +130,10 @@ impl std::fmt::Debug for OrchestratorCommand {
                 .field("agent_id", agent_id)
                 .field("directive", directive)
                 .finish(),
-            Self::AgentExited { agent_id, success } => f
+            Self::AgentExited { agent_id, outcome } => f
                 .debug_struct("AgentExited")
                 .field("agent_id", agent_id)
-                .field("success", success)
-                .finish(),
-            Self::Respawn {
-                objective_id,
-                content,
-                dir,
-                restore_checkpoint_id,
-            } => f
-                .debug_struct("Respawn")
-                .field("objective_id", objective_id)
-                .field(
-                    "content",
-                    &format_args!("<redacted: {} bytes>", content.len()),
-                )
-                .field("dir", dir)
-                .field("restore_checkpoint_id", restore_checkpoint_id)
+                .field("outcome", outcome)
                 .finish(),
         }
     }

@@ -179,6 +179,28 @@ pub enum AgentEvent {
     },
 }
 
+impl AgentEvent {
+    /// Stable kebab-case kind discriminator used as the
+    /// `EventEnvelope::event_type` when persisting `AgentEvent`s through
+    /// `DomainEventStore`.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::StateChanged { .. } => "state_changed",
+            Self::DirectiveChanged { .. } => "directive_changed",
+            Self::CheckpointIdSet { .. } => "checkpoint_id_set",
+            Self::SessionReady { .. } => "session_ready",
+            Self::AgentSpawned { .. } => "agent_spawned",
+            Self::AgentKilled { .. } => "agent_killed",
+            Self::HitlRequested { .. } => "hitl_requested",
+            Self::HitlResolved { .. } => "hitl_resolved",
+            Self::TokenThresholdReached { .. } => "token_threshold_reached",
+            Self::AgentSessionAssigned { .. } => "agent_session_assigned",
+            Self::AgentConfigSnapshotted { .. } => "agent_config_snapshotted",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TransitionError {
     #[error("invalid transition: {command} not allowed in {from} state")]
@@ -234,138 +256,24 @@ impl Agent {
             }]);
         }
 
-        let mut events = Vec::new();
+        // (next_state, optional accompanying directive). Kill and Fail are
+        // valid from any non-terminal state; the rest are state-specific.
+        let (new_state, directive) = match (self.state, &cmd) {
+            (AgentState::Starting, AgentCommand::Activate) => (AgentState::Active, None),
 
-        match (self.state, &cmd) {
-            // Starting
-            (AgentState::Starting, AgentCommand::Activate) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Active,
-                });
-            }
-            (AgentState::Starting, AgentCommand::Kill) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Exited,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::Abort,
-                });
-            }
-            (AgentState::Starting, AgentCommand::Fail { .. }) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Failed,
-                });
-            }
-
-            // Active
             (AgentState::Active, AgentCommand::Pause) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Paused,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::Pause,
-                });
+                (AgentState::Paused, Some(Directive::Pause))
             }
-            (AgentState::Active, AgentCommand::Kill) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Exited,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::Abort,
-                });
-            }
-            (AgentState::Active, AgentCommand::StartSuspending) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Suspending,
-                });
-            }
-            (AgentState::Active, AgentCommand::Complete) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Completed,
-                });
-            }
-            (AgentState::Active, AgentCommand::Fail { .. }) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Failed,
-                });
-            }
+            (AgentState::Active, AgentCommand::StartSuspending) => (AgentState::Suspending, None),
+            (AgentState::Active, AgentCommand::Complete) => (AgentState::Completed, None),
 
-            // Paused
             (AgentState::Paused, AgentCommand::Resume) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Active,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::Continue,
-                });
+                (AgentState::Active, Some(Directive::Continue))
             }
-            (AgentState::Paused, AgentCommand::Kill) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Exited,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::Abort,
-                });
-            }
-            (AgentState::Paused, AgentCommand::StartSuspending) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Suspending,
-                });
-            }
-            (AgentState::Paused, AgentCommand::Fail { .. }) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Failed,
-                });
-            }
+            (AgentState::Paused, AgentCommand::StartSuspending) => (AgentState::Suspending, None),
 
-            // Suspending
-            (AgentState::Suspending, AgentCommand::Kill) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Exited,
-                });
-                events.push(AgentEvent::DirectiveChanged {
-                    agent_id: self.id,
-                    directive: Directive::Abort,
-                });
-            }
-            (AgentState::Suspending, AgentCommand::Fail { .. }) => {
-                events.push(AgentEvent::StateChanged {
-                    agent_id: self.id,
-                    old_state: self.state,
-                    new_state: AgentState::Failed,
-                });
-            }
+            (_, AgentCommand::Kill) => (AgentState::Exited, Some(Directive::Abort)),
+            (_, AgentCommand::Fail { .. }) => (AgentState::Failed, None),
 
             _ => {
                 return Err(TransitionError::InvalidTransition {
@@ -373,8 +281,19 @@ impl Agent {
                     command: format!("{cmd:?}"),
                 });
             }
-        }
+        };
 
+        let mut events = vec![AgentEvent::StateChanged {
+            agent_id: self.id,
+            old_state: self.state,
+            new_state,
+        }];
+        if let Some(directive) = directive {
+            events.push(AgentEvent::DirectiveChanged {
+                agent_id: self.id,
+                directive,
+            });
+        }
         Ok(events)
     }
 

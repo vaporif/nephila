@@ -10,6 +10,7 @@ use nephila_core::session::{Session, SessionPhase};
 use nephila_core::session_event::{InterruptSnapshot, SessionEvent};
 use nephila_eventsourcing::aggregate::EventSourced;
 use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::NewEventEnvelope;
 use nephila_eventsourcing::id::{EventId, TraceId};
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -19,11 +20,10 @@ fn ts() -> chrono::DateTime<chrono::Utc> {
 }
 
 fn envelope_for(event: &SessionEvent, sequence: u64, aggregate_id: &str) -> EventEnvelope {
-    EventEnvelope {
+    let mut env = EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".into(),
         aggregate_id: aggregate_id.into(),
-        sequence,
         event_type: event.kind().into(),
         payload: serde_json::to_value(event).unwrap(),
         trace_id: TraceId("trace-test".into()),
@@ -31,7 +31,9 @@ fn envelope_for(event: &SessionEvent, sequence: u64, aggregate_id: &str) -> Even
         timestamp: ts(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    });
+    env.set_sequence(sequence);
+    env
 }
 
 fn started(session_id: Uuid, agent_id: AgentId) -> SessionEvent {

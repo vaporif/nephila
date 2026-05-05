@@ -171,11 +171,10 @@ async fn pane_renders_awaiting_marker_not_question_text() {
 }
 
 fn envelope(session_id: Uuid, ev: &SessionEvent) -> EventEnvelope {
-    EventEnvelope {
+    EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".to_owned(),
         aggregate_id: session_id.to_string(),
-        sequence: 0,
         event_type: ev.kind().to_owned(),
         payload: serde_json::to_value(ev).expect("serialize SessionEvent"),
         trace_id: TraceId(session_id.to_string()),
@@ -183,5 +182,5 @@ fn envelope(session_id: Uuid, ev: &SessionEvent) -> EventEnvelope {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    }
+    })
 }

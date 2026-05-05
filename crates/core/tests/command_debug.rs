@@ -7,6 +7,7 @@ fn debug_redacts_spawn_content() {
         objective_id: ObjectiveId::new(),
         content: "MY_API_KEY=sk-secret-xyz".into(),
         dir: std::path::PathBuf::from("/tmp"),
+        restore_checkpoint_id: None,
     };
     let s = format!("{cmd:?}");
     assert!(
@@ -41,16 +42,16 @@ fn debug_redacts_spawn_agent_content() {
 #[test]
 fn debug_redacts_respawn_content() {
     use nephila_core::id::CheckpointId;
-    let cmd = OrchestratorCommand::Respawn {
+    let cmd = OrchestratorCommand::Spawn {
         objective_id: ObjectiveId::new(),
         content: "RESPAWN_PAYLOAD_SECRET".into(),
         dir: std::path::PathBuf::from("/tmp"),
-        restore_checkpoint_id: CheckpointId::new(),
+        restore_checkpoint_id: Some(CheckpointId::new()),
     };
     let s = format!("{cmd:?}");
     assert!(
         !s.contains("RESPAWN_PAYLOAD_SECRET"),
-        "Debug must not leak Respawn.content; got: {s}"
+        "Debug must not leak Spawn.content (with restore_checkpoint_id); got: {s}"
     );
 }
 

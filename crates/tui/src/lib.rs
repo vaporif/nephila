@@ -8,12 +8,13 @@ pub mod tui_tracing;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
+use futures::StreamExt;
 use nephila_core::event::BusEvent;
 use nephila_core::id::AgentId;
 use ratatui::{DefaultTerminal, Frame};
+use thiserror::Error;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::goals::{GoalObjective, ObjectiveItem};
@@ -30,6 +31,12 @@ use crate::panels::session_pane::SessionPane;
 use crate::panels::session_pane::pump::HitlRequest;
 use crate::tui_command::TuiCommand;
 use crate::tui_tracing::TuiLogBuffer;
+
+#[derive(Debug, Error)]
+pub enum TuiCommandError {
+    #[error("command channel closed")]
+    ChannelClosed,
+}
 
 /// Bound on the activity-update channel. Pumps publish a glyph per
 /// `SessionEvent`; the App drains the receiver before each render. Drops on
@@ -119,48 +126,11 @@ impl App {
         self.hitl_tx.clone()
     }
 
-    /// Drain pending HITL requests and pop the modal for the most recent one.
-    /// If multiple come in between ticks the older ones are stored in
-    /// `pending_hitl` so the operator can pick them up later via the
-    /// per-agent `Enter` keybind.
-    fn drain_hitl_requests(&mut self) {
-        let mut last: Option<HitlRequest> = None;
-        while let Ok(req) = self.hitl_rx.try_recv() {
-            self.pending_hitl
-                .insert(req.agent_id, (req.question.clone(), req.options.clone()));
-            if let Some(agent) = self.find_agent_mut(&req.agent_id) {
-                agent.hitl_pending = true;
-            }
-            last = Some(req);
-        }
-        if let Some(req) = last
-            && !self.modal.is_open()
-        {
-            self.modal = Modal::HitlResponse {
-                agent_id: req.agent_id,
-                question: req.question,
-                options: req.options,
-                selected: 0,
-            };
-        }
-    }
-
     /// Get a fresh `Sender<AgentActivityUpdate>` to hand to a per-agent pump.
     /// Cloned per pump; drops on a full channel are acceptable.
     #[must_use]
     pub fn activity_sender(&self) -> mpsc::Sender<AgentActivityUpdate> {
         self.activity_tx.clone()
-    }
-
-    /// Drain pending activity updates and apply them to the agent tree.
-    /// Called from the tick loop before each render.
-    fn drain_activity_updates(&mut self) {
-        while let Ok(update) = self.activity_rx.try_recv() {
-            if let Some(agent) = self.find_agent_mut(&update.agent_id) {
-                agent.last_session_event = Some(update.last_event_kind);
-                agent.activity_glyph = Some(update.glyph);
-            }
-        }
     }
 
     /// Open the existing HITL modal for the given agent. Used by the pump
@@ -180,32 +150,58 @@ impl App {
     }
 
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> std::io::Result<()> {
+        let mut term_events = EventStream::new();
         while self.running {
             if self.needs_clear {
                 self.needs_clear = false;
                 terminal.clear()?;
             }
-            self.drain_activity_updates();
-            self.drain_hitl_requests();
             terminal.draw(|frame| self.draw(frame))?;
 
-            if event::poll(Duration::from_millis(100))?
-                && let Event::Key(key) = event::read()?
-            {
-                self.handle_key(key).await;
-            }
+            tokio::select! {
+                biased;
 
-            loop {
-                match self.event_rx.try_recv() {
+                maybe_term = term_events.next() => match maybe_term {
+                    Some(Ok(Event::Key(key))) => self.handle_key(key).await,
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        self.event_log.push(format!("Terminal event error: {e}"));
+                    }
+                    None => self.running = false,
+                },
+                Some(update) = self.activity_rx.recv() => {
+                    if let Some(agent) = self.find_agent_mut(&update.agent_id) {
+                        agent.last_session_event = Some(update.last_event_kind);
+                        agent.activity_glyph = Some(update.glyph);
+                    }
+                }
+                Some(req) = self.hitl_rx.recv() => self.handle_hitl_request(req),
+                bus = self.event_rx.recv() => match bus {
                     Ok(event) => self.handle_bus_event(event),
-                    Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
                         self.event_log.push(format!("Warning: missed {n} events"));
                     }
-                    Err(_) => break,
-                }
+                    Err(broadcast::error::RecvError::Closed) => self.running = false,
+                },
             }
         }
         Ok(())
+    }
+
+    fn handle_hitl_request(&mut self, req: HitlRequest) {
+        self.pending_hitl
+            .insert(req.agent_id, (req.question.clone(), req.options.clone()));
+        if let Some(agent) = self.find_agent_mut(&req.agent_id) {
+            agent.hitl_pending = true;
+        }
+        if !self.modal.is_open() {
+            self.modal = Modal::HitlResponse {
+                agent_id: req.agent_id,
+                question: req.question,
+                options: req.options,
+                selected: 0,
+            };
+        }
     }
 
     fn draw(&mut self, frame: &mut Frame) {
@@ -518,23 +514,25 @@ impl App {
                     && let Some(goal) = self.goals.iter().find(|g| g.file_path == *path)
                 {
                     if let Some(oid) = goal.id {
-                        self.send_command(TuiCommand::Spawn {
-                            objective_id: oid,
-                            content: goal.content.clone(),
-                            dir: self
-                                .goals_dir
-                                .parent()
-                                .unwrap_or(Path::new("."))
-                                .to_path_buf(),
-                        })
-                        .await;
+                        let _ = self
+                            .send_command(TuiCommand::Spawn {
+                                objective_id: oid,
+                                content: goal.content.clone(),
+                                dir: self
+                                    .goals_dir
+                                    .parent()
+                                    .unwrap_or(Path::new("."))
+                                    .to_path_buf(),
+                                restore_checkpoint_id: None,
+                            })
+                            .await;
                     } else {
                         self.event_log
                             .push("Objective not yet registered — try again shortly".into());
                     }
                 }
             }
-            Modal::ConfirmDelete { path, title } => match std::fs::remove_file(&path) {
+            Modal::ConfirmDelete { path, title } => match tokio::fs::remove_file(&path).await {
                 Ok(()) => {
                     self.event_log.push(format!("Deleted \"{title}\""));
                     self.goals = goals::scan_goals_dir(&self.goals_dir).unwrap_or_default();
@@ -721,16 +719,18 @@ impl App {
                 match oid {
                     Some(id) => {
                         tracing::debug!(?id, "sending Spawn command");
-                        self.send_command(TuiCommand::Spawn {
-                            objective_id: id,
-                            content,
-                            dir: self
-                                .goals_dir
-                                .parent()
-                                .unwrap_or(Path::new("."))
-                                .to_path_buf(),
-                        })
-                        .await;
+                        let _ = self
+                            .send_command(TuiCommand::Spawn {
+                                objective_id: id,
+                                content,
+                                dir: self
+                                    .goals_dir
+                                    .parent()
+                                    .unwrap_or(Path::new("."))
+                                    .to_path_buf(),
+                                restore_checkpoint_id: None,
+                            })
+                            .await;
                     }
                     None => {
                         self.event_log
@@ -757,7 +757,7 @@ impl App {
             .selected()
             .and_then(|item| item.data.agent_id());
         if let Some(aid) = aid {
-            self.send_command(TuiCommand::Kill { agent_id: aid }).await;
+            let _ = self.send_command(TuiCommand::Kill { agent_id: aid }).await;
         }
     }
 
@@ -781,7 +781,7 @@ impl App {
             } else {
                 TuiCommand::Pause { agent_id: aid }
             };
-            self.send_command(cmd).await;
+            let _ = self.send_command(cmd).await;
         }
     }
 
@@ -811,7 +811,7 @@ impl App {
             KeyCode::Char('k') => {
                 let aid = self.agent_tree.selected().map(|item| item.data.id);
                 if let Some(aid) = aid {
-                    self.send_command(TuiCommand::Kill { agent_id: aid }).await;
+                    let _ = self.send_command(TuiCommand::Kill { agent_id: aid }).await;
                 }
             }
             KeyCode::Char('p') => {
@@ -827,7 +827,7 @@ impl App {
                     } else {
                         TuiCommand::Pause { agent_id: aid }
                     };
-                    self.send_command(cmd).await;
+                    let _ = self.send_command(cmd).await;
                 }
             }
             KeyCode::Enter => {
@@ -851,21 +851,22 @@ impl App {
                 {
                     let aid = item.data.id;
                     let first = !item.data.has_session;
-                    self.attach_agent_session(aid, sid.clone(), dir.clone(), first);
+                    self.attach_agent_session(aid, sid.clone(), dir.clone(), first)
+                        .await;
                 }
             }
             _ => {}
         }
     }
 
-    async fn send_command(&mut self, cmd: TuiCommand) -> bool {
+    async fn send_command(&mut self, cmd: TuiCommand) -> Result<(), TuiCommandError> {
         tracing::debug!(?cmd, "sending command");
         if self.cmd_tx.send(cmd).await.is_err() {
             tracing::warn!("command channel closed");
             self.event_log.push("Command channel closed".into());
-            return false;
+            return Err(TuiCommandError::ChannelClosed);
         }
-        true
+        Ok(())
     }
 
     fn find_agent_mut(
@@ -879,7 +880,7 @@ impl App {
             .map(|i| &mut i.data)
     }
 
-    fn attach_agent_session(
+    async fn attach_agent_session(
         &mut self,
         agent_id: AgentId,
         session_id: String,
@@ -889,7 +890,7 @@ impl App {
         let _ = crossterm::terminal::disable_raw_mode();
         let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::LeaveAlternateScreen);
 
-        let mut cmd = std::process::Command::new(&self.claude_binary);
+        let mut cmd = tokio::process::Command::new(&self.claude_binary);
         if first_time {
             cmd.arg("--session-id").arg(&session_id);
         } else {
@@ -901,7 +902,7 @@ impl App {
             .arg(r#"{"skipDangerousModePermissionPrompt": true}"#)
             .current_dir(&directory);
 
-        let result = cmd.status();
+        let result = cmd.status().await;
 
         crossterm::terminal::enable_raw_mode().ok();
         crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen).ok();

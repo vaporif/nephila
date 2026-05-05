@@ -1,13 +1,19 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NephilaConfig {
+    #[serde(default)]
     pub nephila: CoreConfig,
+    #[serde(default)]
     pub lifecycle: LifecycleConfig,
+    #[serde(default)]
     pub supervision: SupervisionConfig,
+    #[serde(default)]
     pub summarizer: SummarizerConfig,
+    #[serde(default)]
     pub memory: MemoryConfig,
+    #[serde(default)]
     pub tui: TuiConfig,
     #[serde(default)]
     pub connector: ConnectorConfig,
@@ -15,89 +21,151 @@ pub struct NephilaConfig {
     pub mcp: McpConfig,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageBackend {
+    #[default]
+    Sqlite,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CoreConfig {
-    #[serde(default = "default_storage_backend")]
-    pub storage_backend: String,
-    #[serde(default = "default_sqlite_path")]
+    pub storage_backend: StorageBackend,
     pub sqlite_path: PathBuf,
-    #[serde(default)]
     pub ferrex_config_path: Option<PathBuf>,
-    #[serde(default = "default_l2_collection")]
     pub l2_collection: String,
 }
 
+impl Default for CoreConfig {
+    fn default() -> Self {
+        Self {
+            storage_backend: StorageBackend::Sqlite,
+            sqlite_path: PathBuf::from("./nephila.db"),
+            ferrex_config_path: None,
+            l2_collection: "nephila_l2_chunks".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LifecycleConfig {
-    #[serde(default = "default_context_threshold_pct")]
     pub context_threshold_pct: u8,
-    #[serde(default = "default_context_window_size")]
     pub context_window_size: u64,
-    #[serde(default = "default_token_warn_pct")]
     pub token_warn_pct: u8,
-    #[serde(default = "default_token_critical_pct")]
     pub token_critical_pct: u8,
-    #[serde(default = "default_token_force_kill_pct")]
     pub token_force_kill_pct: u8,
-    #[serde(default = "default_report_interval_normal")]
     pub token_report_interval_normal: u32,
-    #[serde(default = "default_report_interval_warn")]
     pub token_report_interval_warn: u32,
-    #[serde(default = "default_report_interval_critical")]
     pub token_report_interval_critical: u32,
-    #[serde(default = "default_hang_timeout_secs")]
     pub hang_timeout_secs: u64,
-    #[serde(default = "default_drain_timeout_secs")]
     pub drain_timeout_secs: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SupervisionConfig {
-    #[serde(default = "default_strategy")]
-    pub default_strategy: String,
-    #[serde(default = "default_max_restarts")]
-    pub max_restarts: u32,
-    #[serde(default = "default_restart_window_secs")]
-    pub restart_window_secs: u64,
-    #[serde(default = "default_max_agent_depth")]
-    pub max_agent_depth: u32,
+impl Default for LifecycleConfig {
+    fn default() -> Self {
+        Self {
+            context_threshold_pct: 80,
+            context_window_size: 200_000,
+            token_warn_pct: 60,
+            token_critical_pct: 75,
+            token_force_kill_pct: 85,
+            token_report_interval_normal: 10,
+            token_report_interval_warn: 3,
+            token_report_interval_critical: 1,
+            hang_timeout_secs: 300,
+            drain_timeout_secs: 60,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SupervisionConfig {
+    pub default_strategy: String,
+    pub max_restarts: u32,
+    pub restart_window_secs: u64,
+    pub max_agent_depth: u32,
+}
+
+impl Default for SupervisionConfig {
+    fn default() -> Self {
+        Self {
+            default_strategy: "one_for_one".into(),
+            // Counts crashes (not turn exits). With a streaming session the
+            // supervisor records a restart only on `SessionCrashed`, which is
+            // rarer than the old per-turn `claude -p` exit signal.
+            max_restarts: 5,
+            // 10-minute window: assumes each crash takes ~30s of recovery
+            // (kill, lockfile, respawn, replay).
+            restart_window_secs: 600,
+            max_agent_depth: 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SummarizerConfig {
-    #[serde(default = "default_summarizer_backend")]
     pub backend: String,
     pub local_llm_endpoint: Option<String>,
     pub local_llm_model: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Default for SummarizerConfig {
+    fn default() -> Self {
+        Self {
+            backend: "claude".into(),
+            local_llm_endpoint: None,
+            local_llm_model: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MemoryConfig {
-    #[serde(default = "default_novelty_threshold")]
     pub novelty_threshold: f32,
-    #[serde(default = "default_link_similarity_threshold")]
     pub link_similarity_threshold: f32,
-    #[serde(default = "default_decay_access_threshold")]
     pub decay_access_threshold: u32,
-    #[serde(default = "default_archive_after_cycles")]
     pub archive_after_cycles: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl Default for MemoryConfig {
+    fn default() -> Self {
+        Self {
+            novelty_threshold: 0.95,
+            link_similarity_threshold: 0.75,
+            decay_access_threshold: 5,
+            archive_after_cycles: 50,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TuiConfig {
-    #[serde(default = "default_refresh_rate_ms")]
     pub refresh_rate_ms: u64,
-    #[serde(default = "default_max_event_log_lines")]
     pub max_event_log_lines: usize,
-    #[serde(default)]
     pub hitl_timeout_secs: u64,
-    #[serde(default = "default_max_hitl_rerequests")]
     pub max_hitl_rerequests: u32,
 }
 
+impl Default for TuiConfig {
+    fn default() -> Self {
+        Self {
+            refresh_rate_ms: 100,
+            max_event_log_lines: 1000,
+            hitl_timeout_secs: 0,
+            max_hitl_rerequests: 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ConnectorConfig {
-    #[serde(default = "default_claude_binary")]
     pub claude_binary: String,
     pub anthropic_api_key_env: Option<String>,
     pub openai_base_url: Option<String>,
@@ -105,31 +173,10 @@ pub struct ConnectorConfig {
     pub default_model: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct McpConfig {
-    #[serde(default = "default_mcp_host")]
-    pub host: String,
-    #[serde(default)]
-    pub port: u16,
-}
-
-impl Default for McpConfig {
-    fn default() -> Self {
-        Self {
-            host: default_mcp_host(),
-            port: 0,
-        }
-    }
-}
-
-fn default_mcp_host() -> String {
-    "127.0.0.1".into()
-}
-
 impl Default for ConnectorConfig {
     fn default() -> Self {
         Self {
-            claude_binary: default_claude_binary(),
+            claude_binary: "claude".into(),
             anthropic_api_key_env: None,
             openai_base_url: None,
             openai_api_key_env: None,
@@ -138,96 +185,19 @@ impl Default for ConnectorConfig {
     }
 }
 
-fn default_storage_backend() -> String {
-    "sqlite".into()
-}
-fn default_sqlite_path() -> PathBuf {
-    PathBuf::from("./nephila.db")
-}
-fn default_l2_collection() -> String {
-    "nephila_l2_chunks".into()
-}
-fn default_claude_binary() -> String {
-    "claude".into()
-}
-fn default_context_threshold_pct() -> u8 {
-    80
-}
-fn default_context_window_size() -> u64 {
-    200_000
-}
-fn default_token_warn_pct() -> u8 {
-    60
-}
-fn default_token_critical_pct() -> u8 {
-    75
-}
-fn default_token_force_kill_pct() -> u8 {
-    85
-}
-fn default_report_interval_normal() -> u32 {
-    10
-}
-fn default_report_interval_warn() -> u32 {
-    3
-}
-fn default_report_interval_critical() -> u32 {
-    1
-}
-fn default_hang_timeout_secs() -> u64 {
-    300
-}
-fn default_drain_timeout_secs() -> u64 {
-    60
-}
-fn default_strategy() -> String {
-    "one_for_one".into()
-}
-fn default_max_restarts() -> u32 {
-    // Counts crashes (not turn exits). With a streaming session the
-    // supervisor records a restart only on `SessionCrashed`, which is rarer
-    // than the old per-turn `claude -p` exit signal.
-    5
-}
-fn default_restart_window_secs() -> u64 {
-    // 10-minute window: assumes each crash takes ~30s of recovery (kill,
-    // lockfile, respawn, replay).
-    600
-}
-fn default_max_agent_depth() -> u32 {
-    3
-}
-fn default_summarizer_backend() -> String {
-    "claude".into()
-}
-fn default_novelty_threshold() -> f32 {
-    0.95
-}
-fn default_link_similarity_threshold() -> f32 {
-    0.75
-}
-fn default_decay_access_threshold() -> u32 {
-    5
-}
-fn default_archive_after_cycles() -> u32 {
-    50
-}
-fn default_refresh_rate_ms() -> u64 {
-    100
-}
-fn default_max_event_log_lines() -> usize {
-    1000
-}
-fn default_max_hitl_rerequests() -> u32 {
-    3
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpConfig {
+    pub host: String,
+    pub port: u16,
 }
 
-impl Default for NephilaConfig {
+impl Default for McpConfig {
     fn default() -> Self {
-        toml::from_str(
-            "[nephila]\n[lifecycle]\n[supervision]\n[summarizer]\n[memory]\n[tui]\n[connector]\n[mcp]\n",
-        )
-        .expect("default config must parse")
+        Self {
+            host: "127.0.0.1".into(),
+            port: 0,
+        }
     }
 }
 
@@ -253,7 +223,7 @@ sqlite_path = "./test.db"
 "#;
         let config: NephilaConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.lifecycle.context_threshold_pct, 80);
-        assert_eq!(config.memory.novelty_threshold, 0.95);
+        assert!((config.memory.novelty_threshold - 0.95).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -295,7 +265,7 @@ max_hitl_rerequests = 3
 claude_binary = "claude"
 "#;
         let config: NephilaConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.nephila.storage_backend, "sqlite");
+        assert_eq!(config.nephila.storage_backend, StorageBackend::Sqlite);
         assert_eq!(config.supervision.max_restarts, 5);
         assert_eq!(config.supervision.max_agent_depth, 3);
         assert_eq!(config.connector.claude_binary, "claude");

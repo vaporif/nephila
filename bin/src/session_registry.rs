@@ -58,7 +58,9 @@ pub enum RegistryError {
     #[error("connector: {0}")]
     Connector(#[from] ConnectorError),
     #[error("store: {0}")]
-    Store(String),
+    Store(#[from] nephila_eventsourcing::store::EventStoreError),
+    #[error("store: {0}")]
+    StoreOther(String),
 }
 
 struct SessionHandle {
@@ -241,25 +243,24 @@ impl SessionRegistry {
     /// to registry defaults (with a warn log) when the snapshot is absent.
     fn cfg_from(&self, agent: &Agent) -> SessionConfig {
         let (claude_binary, mcp_endpoint, permission_mode, working_dir) =
-            match &agent.last_config_snapshot {
-                Some(snap) => (
+            if let Some(snap) = &agent.last_config_snapshot {
+                (
                     snap.claude_binary.clone(),
                     snap.mcp_endpoint.clone(),
                     snap.permission_mode.clone(),
                     snap.working_dir.clone(),
-                ),
-                None => {
-                    tracing::warn!(
-                        %agent.id,
-                        "agent has no last_config_snapshot; falling back to registry defaults",
-                    );
-                    (
-                        self.defaults.claude_binary.clone(),
-                        self.defaults.mcp_endpoint.clone(),
-                        self.defaults.permission_mode.clone(),
-                        agent.directory.clone(),
-                    )
-                }
+                )
+            } else {
+                tracing::warn!(
+                    %agent.id,
+                    "agent has no last_config_snapshot; falling back to registry defaults",
+                );
+                (
+                    self.defaults.claude_binary.clone(),
+                    self.defaults.mcp_endpoint.clone(),
+                    self.defaults.permission_mode.clone(),
+                    agent.directory.clone(),
+                )
             };
 
         let session_id = agent
@@ -320,7 +321,7 @@ impl SessionRegistry {
                 };
                 match ev {
                     SessionEvent::SessionCrashed { .. } => {
-                        me.on_crash(agent_id, env.sequence).await;
+                        me.on_crash(agent_id, env.sequence()).await;
                         break;
                     }
                     SessionEvent::SessionEnded { .. } => {
@@ -370,7 +371,7 @@ impl SessionRegistry {
         {
             tracing::debug!(
                 %agent_id,
-                last_respawn_ago_ms = last.elapsed().as_millis() as u64,
+                last_respawn_ago_ms = ?last.elapsed(),
                 "fallback within dedup window; skipping",
             );
             return;
@@ -422,20 +423,20 @@ impl SessionRegistry {
                 let _ = tx.send(());
                 let (_never_tx, never_rx) = tokio::sync::oneshot::channel::<()>();
                 let _ = never_rx.await;
-                return Err(RegistryError::Store("test-only abort path".into()));
+                return Err(RegistryError::StoreOther("test-only abort path".into()));
             }
         }
 
         let session_id = self
             .session_ids
             .get(&agent_id)
-            .map(|r| *r)
-            .ok_or_else(|| RegistryError::Store("no session_id known".into()))?;
+            .map(|r| *r.value())
+            .ok_or_else(|| RegistryError::StoreOther("no session_id known".into()))?;
 
         let agent = match nephila_core::store::AgentStore::get(&*self.store, agent_id).await {
             Ok(Some(a)) => a,
-            Ok(None) => return Err(RegistryError::Store("agent not found".into())),
-            Err(e) => return Err(RegistryError::Store(e.to_string())),
+            Ok(None) => return Err(RegistryError::StoreOther("agent not found".into())),
+            Err(e) => return Err(RegistryError::StoreOther(e.to_string())),
         };
 
         let cfg = self.cfg_from(&agent);
@@ -464,7 +465,7 @@ impl SessionRegistry {
             .store
             .list_agents_in_active_phase()
             .await
-            .map_err(|e| RegistryError::Store(e.to_string()))?;
+            .map_err(|e| RegistryError::StoreOther(e.to_string()))?;
 
         for agent in agents {
             let Some(session_id_str) = agent.session_id.as_deref() else {
@@ -516,16 +517,12 @@ impl SessionRegistry {
             .handle(nephila_core::agent::AgentCommand::Fail {
                 reason: reason.to_owned(),
             })
-            .map_err(|e| RegistryError::Store(format!("agent.handle(Fail): {e}")))?;
-        self.append_agent_events(agent.id, &events)
-            .await
-            .map_err(|e| RegistryError::Store(format!("append agent events: {e}")))?;
-        let projected = events
-            .iter()
-            .fold(agent.clone(), |acc, ev| acc.apply_event(ev));
+            .map_err(|e| RegistryError::StoreOther(format!("agent.handle(Fail): {e}")))?;
+        self.append_agent_events(agent.id, &events).await?;
+        let projected = events.iter().fold(agent.clone(), Agent::apply_event);
         nephila_core::store::AgentStore::save(&*self.store, &projected)
             .await
-            .map_err(|e| RegistryError::Store(format!("AgentStore::save: {e}")))?;
+            .map_err(|e| RegistryError::StoreOther(format!("AgentStore::save: {e}")))?;
         Ok(())
     }
 
@@ -538,20 +535,20 @@ impl SessionRegistry {
         let envelopes: Vec<EventEnvelope> = events
             .iter()
             .map(|e| {
-                let payload = serde_json::to_value(e).unwrap_or(serde_json::Value::Null);
-                EventEnvelope {
+                let payload =
+                    serde_json::to_value(e).expect("AgentEvent serializes to JSON infallibly");
+                EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
                     id: EventId::new(),
                     aggregate_type: "agent".to_owned(),
                     aggregate_id: agent_id.to_string(),
-                    sequence: 0,
-                    event_type: agent_event_kind(e).to_owned(),
+                    event_type: e.kind().to_owned(),
                     payload,
                     trace_id: TraceId(agent_id.to_string()),
                     outcome: None,
                     timestamp: Utc::now(),
                     context_snapshot: None,
                     metadata: std::collections::HashMap::new(),
-                }
+                })
             })
             .collect();
         self.store.append_batch(envelopes).await.map(|_| ())
@@ -583,7 +580,7 @@ impl SessionRegistry {
     /// Test seam: pre-create the per-agent `RespawnState` entry so that
     /// concurrent `on_crash` callers race the same mutex.
     #[cfg(test)]
-    pub async fn materialize_respawn_state_for_test(self: &Arc<Self>, agent_id: AgentId) {
+    pub fn materialize_respawn_state_for_test(self: &Arc<Self>, agent_id: AgentId) {
         let _ = self
             .respawn_states
             .entry(agent_id)
@@ -598,22 +595,6 @@ impl SessionRegistry {
             return 0;
         };
         lock.lock().await.respawn_count
-    }
-}
-
-fn agent_event_kind(e: &AgentEvent) -> &'static str {
-    match e {
-        AgentEvent::StateChanged { .. } => "state_changed",
-        AgentEvent::DirectiveChanged { .. } => "directive_changed",
-        AgentEvent::CheckpointIdSet { .. } => "checkpoint_id_set",
-        AgentEvent::SessionReady { .. } => "session_ready",
-        AgentEvent::AgentSpawned { .. } => "agent_spawned",
-        AgentEvent::AgentKilled { .. } => "agent_killed",
-        AgentEvent::HitlRequested { .. } => "hitl_requested",
-        AgentEvent::HitlResolved { .. } => "hitl_resolved",
-        AgentEvent::TokenThresholdReached { .. } => "token_threshold_reached",
-        AgentEvent::AgentSessionAssigned { .. } => "agent_session_assigned",
-        AgentEvent::AgentConfigSnapshotted { .. } => "agent_config_snapshotted",
     }
 }
 
@@ -670,7 +651,7 @@ mod tests {
             None,
         );
         let activate_events = agent.handle(AgentCommand::Activate).unwrap();
-        agent = activate_events.iter().fold(agent, |a, e| a.apply_event(e));
+        agent = activate_events.iter().fold(agent, Agent::apply_event);
         store.register(agent.clone()).await.unwrap();
         AgentStore::update_state(&*store, agent.id, AgentState::Active)
             .await
@@ -729,19 +710,18 @@ mod tests {
         let ev = SessionEvent::SessionEnded {
             ts: chrono::Utc::now(),
         };
-        let env = EventEnvelope {
+        let env = EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
             id: EventId::new(),
             aggregate_type: "session".to_owned(),
             aggregate_id: session_id.to_string(),
-            sequence: 0,
             event_type: "session_ended".to_owned(),
             payload: serde_json::to_value(&ev).unwrap(),
             trace_id: TraceId(session_id.to_string()),
             outcome: None,
             timestamp: chrono::Utc::now(),
             context_snapshot: None,
-            metadata: Default::default(),
-        };
+            metadata: std::collections::HashMap::new(),
+        });
         store.append_batch(vec![env]).await.unwrap();
 
         // Wait up to 2s for the watcher to exit.
@@ -779,19 +759,18 @@ mod tests {
             exit_code: Some(1),
             ts: chrono::Utc::now(),
         };
-        let env = EventEnvelope {
+        let env = EventEnvelope::new(nephila_eventsourcing::envelope::NewEventEnvelope {
             id: EventId::new(),
             aggregate_type: "session".to_owned(),
             aggregate_id: session_id.to_string(),
-            sequence: 0,
             event_type: "session_crashed".to_owned(),
             payload: serde_json::to_value(&ev).unwrap(),
             trace_id: TraceId(session_id.to_string()),
             outcome: None,
             timestamp: chrono::Utc::now(),
             context_snapshot: None,
-            metadata: Default::default(),
-        };
+            metadata: std::collections::HashMap::new(),
+        });
         store.append_batch(vec![env]).await.unwrap();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);

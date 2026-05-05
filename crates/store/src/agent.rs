@@ -176,7 +176,13 @@ impl AgentStore for SqliteStore {
                     .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?;
                 match stmt.query_row(rusqlite::params![id], |row| {
                     let s: String = row.get(0)?;
-                    Ok(s.parse::<Directive>().unwrap_or(Directive::Continue))
+                    s.parse::<Directive>().map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            Box::new(e),
+                        )
+                    })
                 }) {
                     Ok(d) => Ok(Some(d)),
                     Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -326,19 +332,43 @@ fn row_to_agent(row: &rusqlite::Row) -> Result<Agent, rusqlite::Error> {
             let source_cp: Option<String> = row.get(12)?;
             match origin_type.as_str() {
                 "fork" => {
-                    let src_agent = spawned_by.expect("fork must have spawned_by");
+                    let src_agent = spawned_by.ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            5,
+                            rusqlite::types::Type::Text,
+                            "fork origin missing spawned_by".into(),
+                        )
+                    })?;
                     let src_cp_id = source_cp
-                        .and_then(|s| s.parse::<uuid::Uuid>().ok())
+                        .as_deref()
+                        .ok_or_else(|| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                12,
+                                rusqlite::types::Type::Text,
+                                "fork origin missing source_checkpoint_id".into(),
+                            )
+                        })?
+                        .parse::<uuid::Uuid>()
                         .map(CheckpointId)
-                        .expect("fork must have source_checkpoint_id");
+                        .map_err(|e| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                12,
+                                rusqlite::types::Type::Text,
+                                Box::new(e),
+                            )
+                        })?;
                     SpawnOrigin::Fork {
                         source_agent_id: src_agent,
                         source_checkpoint_id: src_cp_id,
                     }
                 }
-                "agent" => {
-                    SpawnOrigin::Agent(spawned_by.expect("agent origin must have spawned_by"))
-                }
+                "agent" => SpawnOrigin::Agent(spawned_by.ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        5,
+                        rusqlite::types::Type::Text,
+                        "agent origin missing spawned_by".into(),
+                    )
+                })?),
                 _ => SpawnOrigin::Operator,
             }
         },

@@ -8,7 +8,7 @@
 
 use chrono::Utc;
 use nephila_core::session_event::{SessionEvent, ToolResultPayload};
-use nephila_eventsourcing::envelope::EventEnvelope;
+use nephila_eventsourcing::envelope::{EventEnvelope, NewEventEnvelope};
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
 use nephila_store::SqliteStore;
@@ -33,11 +33,10 @@ async fn append_batch_with_blobs_round_trips() {
         is_error: false,
         ts: Utc::now(),
     };
-    let env = EventEnvelope {
+    let env = EventEnvelope::new(NewEventEnvelope {
         id: EventId::new(),
         aggregate_type: "session".into(),
         aggregate_id: agg_id.clone(),
-        sequence: 0,
         event_type: event.kind().into(),
         payload: serde_json::to_value(&event).unwrap(),
         trace_id: TraceId("t".into()),
@@ -45,7 +44,7 @@ async fn append_batch_with_blobs_round_trips() {
         timestamp: Utc::now(),
         context_snapshot: None,
         metadata: HashMap::new(),
-    };
+    });
     let prepared_hash = prepared.hash.clone();
     let prepared_len = prepared.original_len;
     let seqs = store
@@ -78,11 +77,10 @@ async fn append_batch_with_blobs_idempotent_on_duplicate_hash() {
             is_error: false,
             ts: Utc::now(),
         };
-        EventEnvelope {
+        EventEnvelope::new(NewEventEnvelope {
             id: EventId::new(),
             aggregate_type: "session".into(),
             aggregate_id: agg_id.into(),
-            sequence: 0,
             event_type: event.kind().into(),
             payload: serde_json::to_value(&event).unwrap(),
             trace_id: TraceId("t".into()),
@@ -90,7 +88,7 @@ async fn append_batch_with_blobs_idempotent_on_duplicate_hash() {
             timestamp: Utc::now(),
             context_snapshot: None,
             metadata: HashMap::new(),
-        }
+        })
     }
 
     let env1 = env_for(&agg_id, &p.hash);

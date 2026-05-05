@@ -114,15 +114,6 @@ impl std::fmt::Debug for SessionSupervisor {
     }
 }
 
-fn default_supervision_config() -> SupervisionConfig {
-    SupervisionConfig {
-        default_strategy: "one_for_one".into(),
-        max_restarts: 5,
-        restart_window_secs: 600,
-        max_agent_depth: 3,
-    }
-}
-
 impl SessionSupervisor {
     #[must_use]
     pub fn new(store: Arc<SqliteStore>, supervision_config: SupervisionConfig) -> Self {
@@ -146,7 +137,7 @@ impl SessionSupervisor {
     #[must_use]
     pub fn new_for_test() -> Self {
         let store = Arc::new(SqliteStore::open_in_memory(384).expect("test store opens in-memory"));
-        Self::new(store, default_supervision_config())
+        Self::new(store, SupervisionConfig::default())
     }
 
     /// Test seam: register a session with a fake driver before driving events.
