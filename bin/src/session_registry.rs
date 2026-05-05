@@ -151,9 +151,9 @@ impl SessionRegistry {
         self.started_tx.subscribe()
     }
 
-    /// Test seam — slice 4 keeps this for property tests; production code
-    /// should call `ensure_session` instead, which fires `started_tx` itself.
-    #[allow(dead_code)]
+    /// Test-only: fire `started_tx` without spawning a session. Production
+    /// code goes through `ensure_session`, which fires the broadcast itself.
+    #[cfg(test)]
     pub fn fire_started(&self, agent_id: AgentId) {
         let _ = self.started_tx.send(agent_id);
     }
