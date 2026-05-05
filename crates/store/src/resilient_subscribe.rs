@@ -116,7 +116,7 @@ pub fn resilient_subscribe_with_config<S>(
 where
     S: DomainEventStore + Send + Sync + 'static,
 {
-    let (tx, rx) = mpsc::channel::<Result<EventEnvelope, EventStoreError>>(64);
+    let (tx, mut rx) = mpsc::channel::<Result<EventEnvelope, EventStoreError>>(64);
     tokio::spawn(async move {
         let mut last_seq = since;
         let mut retry = RetryState::new(cfg);
@@ -170,7 +170,6 @@ where
             return;
         }
     });
-    let mut rx = rx;
     futures::stream::poll_fn(move |cx| rx.poll_recv(cx))
 }
 
