@@ -40,7 +40,6 @@ fn env(payload_text: &str) -> EventEnvelope {
 async fn listener_attached_before_head_snapshot_does_not_lose_concurrent_appends() {
     let store = Arc::new(SqliteStore::open_in_memory(384).unwrap());
 
-    // Pre-seed seq 1..=3.
     let _ = store
         .append_batch(vec![env("e1"), env("e2"), env("e3")])
         .await

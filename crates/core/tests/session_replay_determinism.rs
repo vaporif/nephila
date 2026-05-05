@@ -159,10 +159,8 @@ proptest! {
             .map(|(i, e)| envelope(e, (i + 1) as u64, agg))
             .collect();
 
-        // s1: full replay via apply_envelope (the production path).
         let s1 = fold_apply_envelope(Session::default_state(), &envs);
 
-        // Pick k in 0..events.len() — slice into [..k] and [k..].
         let k = (k_seed as usize) % events.len().max(1);
         let mid = fold_apply_envelope(Session::default_state(), &envs[..k]);
         let s2 = fold_apply_envelope(mid, &envs[k..]);

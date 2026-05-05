@@ -508,7 +508,6 @@ mod tests {
         orch.handle_agent_exited(agent_id, ExitOutcome::Failure)
             .await
             .unwrap();
-        // State should remain Completed (no-op)
         assert_eq!(
             orch.agents.get(&agent_id).unwrap().state,
             AgentState::Completed

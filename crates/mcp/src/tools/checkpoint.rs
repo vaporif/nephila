@@ -9,9 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::server::{NephilaMcpServer, nephila_err, parse_agent_id};
 use nephila_core::channel::{merge_channels, validate_channels};
 use nephila_core::checkpoint::{ChannelEntry, CheckpointNode, L2Chunk};
-// `BusEvent` import removed: the connector reader is the sole producer of
-// checkpoint events.
-// use nephila_core::event::BusEvent;
 use nephila_core::id::CheckpointId;
 use nephila_core::store::{AgentStore, CheckpointStore, InterruptStore};
 

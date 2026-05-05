@@ -908,7 +908,6 @@ impl App {
         crossterm::execute!(std::io::stdout(), crossterm::terminal::EnterAlternateScreen).ok();
         self.needs_clear = true;
 
-        // Mark session as created after first attach
         if first_time && let Some(agent) = self.find_agent_mut(&agent_id) {
             agent.has_session = true;
         }

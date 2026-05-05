@@ -59,7 +59,6 @@ async fn one_iter() -> Duration {
         }));
     }
 
-    // Producer: 10 turns × 500 events.
     for turn in 0..(TOTAL_EVENTS / CHUNK) {
         let envs: Vec<_> = (0..CHUNK)
             .map(|i| env(&format!("t{turn}-i{i}"), agg))

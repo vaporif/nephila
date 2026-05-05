@@ -70,7 +70,6 @@ async fn first_subscribe_after_threshold_spawns_snapshot_task() {
     let envelopes: Vec<_> = events.iter().map(|e| env(e, &agg_id)).collect();
     let _ = store.append_batch(envelopes).await.unwrap();
 
-    // First subscribe: triggers the snapshot task.
     let _stream1 = store.subscribe_after("session", &agg_id, 0).await.unwrap();
     drop(_stream1);
 
@@ -99,7 +98,6 @@ async fn second_subscribe_does_not_spawn_duplicate_snapshot() {
     let agent_id = AgentId::new();
     let agg_id = session_id.to_string();
 
-    // 1500 events.
     let mut events = Vec::with_capacity(1500);
     events.push(started(session_id, agent_id));
     for i in 0..1499 {
@@ -120,7 +118,6 @@ async fn second_subscribe_does_not_spawn_duplicate_snapshot() {
     let _s2 = store.subscribe_after("session", &agg_id, 0).await.unwrap();
     let _s3 = store.subscribe_after("session", &agg_id, 0).await.unwrap();
 
-    // Wait for snapshot to land.
     for _ in 0..50 {
         if store
             .load_latest_snapshot("session", &agg_id)
@@ -137,7 +134,6 @@ async fn second_subscribe_does_not_spawn_duplicate_snapshot() {
     let _s4 = store.subscribe_after("session", &agg_id, 0).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Confirm we still have exactly one snapshot at sequence 1500.
     let snap = store
         .load_latest_snapshot("session", &agg_id)
         .await

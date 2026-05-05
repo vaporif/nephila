@@ -204,7 +204,6 @@ async fn main() -> Result<()> {
     let _crash_fallback_handle = Arc::clone(&session_registry)
         .start_crash_fallback_listener()
         .await;
-    // Resume any agents in an active phase from a previous orchestrator run.
     if let Err(e) = session_registry.on_startup().await {
         tracing::warn!(%e, "SessionRegistry::on_startup failed");
     }

@@ -77,10 +77,6 @@ async fn typing_in_pane_emits_human_prompt_events() {
         PumpChannels::default(),
     );
 
-    // Drive the input/normal mode FSM: focus pane → enter input mode (i) →
-    // type "hello" → submit (Ctrl+Enter). The submit returns the text via
-    // `InputAction::Submit`, and the pane spawns a `send_turn` task in the
-    // background so the TUI tick loop is not blocked.
     let mut input = InputState::new();
     assert!(matches!(input.mode(), PaneMode::Normal));
     let action = input.handle_key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));

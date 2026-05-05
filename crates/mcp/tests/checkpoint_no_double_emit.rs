@@ -17,12 +17,5 @@
 #[ignore = "needs MCP stub harness; un-ignored in slice 4 after SessionRegistry lands"]
 #[test]
 fn checkpoint_round_trip_emits_zero_bus_events() {
-    // Outline (to be filled in during slice 4 integration):
-    //   1. spin up fake_claude with a scenario that hits CheckpointReached
-    //   2. connect ClaudeCodeSession with the MCP stub wired to a
-    //      `broadcast::Sender<BusEvent>` we control
-    //   3. drive the session to a checkpoint
-    //   4. count BusEvent::CheckpointSaved on the receiver — assert 0
-    //   5. count SessionEvent::CheckpointReached in the store — assert 1
     unreachable!("see #[ignore] reason");
 }

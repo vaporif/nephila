@@ -92,7 +92,6 @@ mod tests {
         assert!(tracker.record_restart());
         assert_eq!(tracker.restart_count(), 3);
 
-        // exceeds limit
         assert!(!tracker.record_restart());
         assert_eq!(tracker.restart_count(), 3);
     }

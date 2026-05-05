@@ -256,8 +256,8 @@ impl Agent {
             }]);
         }
 
-        // (next_state, optional accompanying directive). Kill and Fail are
-        // valid from any non-terminal state; the rest are state-specific.
+        // Kill and Fail are valid from any non-terminal state; the rest are
+        // state-specific.
         let (new_state, directive) = match (self.state, &cmd) {
             (AgentState::Starting, AgentCommand::Activate) => (AgentState::Active, None),
 
@@ -594,13 +594,11 @@ mod tests {
         let agent = test_agent();
         let events = agent.handle(AgentCommand::Kill).unwrap();
         let agent = apply_all(agent, &events);
-        assert!(
-            agent
-                .handle(AgentCommand::SetSession {
-                    session_id: "s".into()
-                })
-                .is_err()
-        );
+        assert!(agent
+            .handle(AgentCommand::SetSession {
+                session_id: "s".into()
+            })
+            .is_err());
     }
 
     #[test]

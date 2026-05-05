@@ -102,21 +102,9 @@ async fn respawn_replaces_handle_after_crash() {
         return;
     };
     let workdir = tempfile::tempdir().expect("tempdir");
-    // Crash on first turn, then a second wrapper would be used after respawn —
-    // but the registry's resume path goes via `--resume` which the same wrapper
-    // also handles. To simplify: use a wrapper that crashes once then works,
-    // we approximate by using `crash_mid_turn` for the initial start (so the
-    // EOF handler emits SessionCrashed), then the resume-fallback path will
-    // try `--resume`, fail, then `--session-id` (Happy). Use `resume_not_found`
-    // for the wrapper so that `--resume` returns "not found" and we fall back
-    // to `--session-id` which is Happy.
-    //
-    // We can't use `crash_mid_turn` because real respawn would crash again.
-    // Instead we test that on_crash actually replaces the handle when given
-    // a known session_id. We use a wrapper that emits Happy frames; we
-    // manually trigger on_crash by appending a SessionCrashed event to the
-    // store, which the watcher should pick up.
-
+    // Use the `happy` wrapper for both the initial spawn and the resume path,
+    // and trigger respawn by appending a synthetic SessionCrashed event so the
+    // watcher picks it up — keeps the test deterministic across respawn.
     let happy = wrap_with_scenario(workdir.path(), "happy", &fake);
 
     let store = Arc::new(SqliteStore::open_in_memory(384).expect("store"));
@@ -161,13 +149,10 @@ async fn respawn_replaces_handle_after_crash() {
     );
     store.append_batch(vec![env]).await.expect("append crash");
 
-    // Wait until a respawn lands a NEW handle (or original is removed).
     let _ = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             tokio::time::sleep(Duration::from_millis(50)).await;
             if reg.has_session(agent_id) {
-                // Could be a new handle. Verify by checking the SessionStarted
-                // count via subscribe_after.
                 let mut s = store
                     .subscribe_after("session", &session_id.to_string(), 0)
                     .await
@@ -200,9 +185,9 @@ async fn respawn_replaces_handle_after_crash() {
     drop(workdir);
 }
 
-// Step 4 lockfile semantics — the second-acquire test lives in the
-// `nephila-store::lockfile` module to avoid HOME-env races between test
-// crates running in the same process.
+// The second-acquire lockfile test lives in `nephila-store::lockfile` instead
+// of here, to avoid HOME-env races between test crates running in the same
+// process.
 
 #[tokio::test]
 async fn on_startup_resumes_active_agents() {
@@ -217,7 +202,6 @@ async fn on_startup_resumes_active_agents() {
     let blob = Arc::new(SqliteBlobReader::new(store.read_pool()));
     let defaults = defaults_for(workdir.path(), &happy);
 
-    // Register an active agent with a session_id.
     let mut agent = fresh_agent(workdir.path(), &happy);
     let session_id: Uuid = Uuid::new_v4();
     agent.session_id = Some(session_id.to_string());
@@ -433,13 +417,11 @@ async fn crash_during_respawn_orphan_recovery() {
             .await
             .expect("set active");
 
-        // Spin up the first handle.
         reg.bind_session_id_for_test(agent_id, session_id);
 
-        // We must produce a SessionStarted in the store so the watcher's
-        // subscribe sees state. Easiest: ensure_session — but that uses a
-        // fresh session_id. For this test we directly call on_crash with a
-        // synthetic crash sequence.
+        // The test calls on_crash directly with a synthetic crash sequence
+        // rather than going through ensure_session, which would mint a fresh
+        // session_id and miss the orphan-window we're trying to exercise.
 
         // Install the abort hook BEFORE on_crash fires.
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
@@ -451,7 +433,6 @@ async fn crash_during_respawn_orphan_recovery() {
             reg_for_task.on_crash(agent_id, 1).await;
         });
 
-        // Wait for the signal that drop happened.
         let _ = tokio::time::timeout(Duration::from_secs(5), rx)
             .await
             .expect("drop signal not received in time");

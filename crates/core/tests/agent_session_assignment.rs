@@ -1,4 +1,4 @@
-//! Slice 4 step 5a: `Agent` reducer applies `AgentSessionAssigned` and
+//! `Agent` reducer applies `AgentSessionAssigned` and
 //! `AgentConfigSnapshotted` correctly.
 //!
 //! - Fresh agent has `session_id == None` and `last_config_snapshot == None`.

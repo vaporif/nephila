@@ -15,9 +15,6 @@
 //! `SessionCrashed` or `SessionEnded`, or we leak one task per ever-spawned
 //! session.
 
-// The orchestrator-driven `spawn` path that calls `ensure_session` is wired in
-// from a separate plan; some methods compile but are not yet called from
-// production code paths.
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -215,8 +212,7 @@ impl SessionRegistry {
 
         self.session_ids.insert(agent.id, session_id);
 
-        // Append `AgentSessionAssigned` + `AgentConfigSnapshotted` to the
-        // agent aggregate so post-restart resume can find this binding.
+        // Persist the assignment so post-restart resume can find this binding.
         let snap = AgentConfigSnapshot {
             working_dir: agent.directory.clone(),
             mcp_endpoint: self.defaults.mcp_endpoint.clone(),
@@ -676,11 +672,9 @@ mod tests {
             .await
             .expect("mark_agent_failed");
 
-        // Projection reflects Failed.
         let after = store.get(agent.id).await.unwrap().unwrap();
         assert_eq!(after.state, AgentState::Failed);
 
-        // Event log contains a StateChanged event with new_state = Failed.
         let events = store
             .load_events("agent", &agent.id.to_string(), 0)
             .await
@@ -721,7 +715,6 @@ mod tests {
 
         let abort = reg.spawn_crash_watch(agent_id, session_id);
 
-        // Append SessionEnded; the watcher must break out.
         let ev = SessionEvent::SessionEnded {
             ts: chrono::Utc::now(),
         };
@@ -739,7 +732,6 @@ mod tests {
         });
         store.append_batch(vec![env]).await.unwrap();
 
-        // Wait up to 2s for the watcher to exit.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while std::time::Instant::now() < deadline {
             if abort.is_finished() {

@@ -126,7 +126,6 @@ async fn pause_halts_event_stream_then_resume_continues() {
 
     session.resume_paused().await.expect("resume");
 
-    // After resume, events should flow again.
     let mut events_after_resume: u32 = 0;
     let _ = tokio::time::timeout(Duration::from_secs(3), async {
         while let Some(item) = stream.next().await {

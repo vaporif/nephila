@@ -162,7 +162,6 @@ async fn crash_mid_turn_emits_turn_aborted_then_session_crashed() {
         }
     }
 
-    // Find the indices of TurnAborted and SessionCrashed.
     let aborted_idx = seen
         .iter()
         .position(|e| matches!(e, SessionEvent::TurnAborted { .. }));

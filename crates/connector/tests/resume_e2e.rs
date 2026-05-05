@@ -66,7 +66,6 @@ async fn resume_succeeds_when_session_exists() {
         .await
         .expect("subscribe_after");
 
-    // Look for SessionStarted with resumed=true.
     let mut found_resumed = false;
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
         while let Some(item) = stream.next().await {

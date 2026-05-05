@@ -117,7 +117,7 @@ impl EventSourced for Session {
                 self.open_turn = Some(*turn_id);
             }
             SessionEvent::AgentPromptDelivered { .. }
-            | SessionEvent::HumanPromptDelivered { .. } => { /* state unchanged */ }
+            | SessionEvent::HumanPromptDelivered { .. } => {}
             SessionEvent::PromptDeliveryFailed { turn_id, .. } => {
                 if self.open_turn == Some(*turn_id) {
                     self.open_turn = None;
@@ -125,7 +125,7 @@ impl EventSourced for Session {
             }
             SessionEvent::AssistantMessage { .. }
             | SessionEvent::ToolCall { .. }
-            | SessionEvent::ToolResult { .. } => { /* state unchanged */ }
+            | SessionEvent::ToolResult { .. } => {}
             SessionEvent::CheckpointReached {
                 checkpoint_id,
                 interrupt,

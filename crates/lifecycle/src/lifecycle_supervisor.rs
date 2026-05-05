@@ -567,7 +567,6 @@ mod tests {
 
         event_tx.send(BusEvent::Shutdown).unwrap();
         supervisor.run().await;
-        // If we reach here, the run loop correctly exited on Shutdown
     }
 
     #[tokio::test]

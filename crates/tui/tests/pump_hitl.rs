@@ -57,7 +57,6 @@ async fn pump_forwards_hitl_request_on_checkpoint() {
         },
     );
 
-    // Now append a CheckpointReached(Hitl) — pump should receive it.
     let cp = SessionEvent::CheckpointReached {
         checkpoint_id: CheckpointId(Uuid::new_v4()),
         interrupt: Some(InterruptSnapshot::Hitl {
