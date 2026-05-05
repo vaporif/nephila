@@ -35,7 +35,7 @@ impl ReadPool {
                 path,
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_FULL_MUTEX,
             )?;
-            let _ = crate::schema::apply_tuning_pragmas(&conn);
+            crate::schema::apply_tuning_pragmas(&conn)?;
             conns.push(conn);
         }
         Ok(Self {

@@ -62,7 +62,9 @@ impl WriterHandle {
     ) -> Self {
         // mmap/cache/temp_store/wal_autocheckpoint/synchronous. mmap and WAL
         // pragmas are no-ops on in-memory; safe to apply universally.
-        let _ = crate::schema::apply_tuning_pragmas(&conn);
+        if let Err(e) = crate::schema::apply_tuning_pragmas(&conn) {
+            tracing::warn!(%e, "writer pragma application failed");
+        }
         let (tx, rx) = mpsc::channel::<WriterCmd>();
         let bcasts = broadcasts.clone();
         std::thread::spawn(move || writer_loop(conn, rx, bcasts));
