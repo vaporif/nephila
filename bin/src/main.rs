@@ -188,15 +188,17 @@ async fn main() -> Result<()> {
         blob_reader,
         registry_defaults,
     ));
-    // Resume any agents in an active phase from a previous orchestrator run.
-    if let Err(e) = session_registry.on_startup().await {
-        tracing::warn!(%e, "SessionRegistry::on_startup failed");
-    }
-    // Wire the connector's crash-fallback channel into `on_crash`.
+    // Wire the connector's crash-fallback channel into `on_crash` before any session
+    // can produce events — otherwise an `on_startup` resume that crashes immediately
+    // would push into the bounded fallback channel with no listener draining it.
     let _crash_fallback_handle = session_registry
         .clone()
         .start_crash_fallback_listener()
         .await;
+    // Resume any agents in an active phase from a previous orchestrator run.
+    if let Err(e) = session_registry.on_startup().await {
+        tracing::warn!(%e, "SessionRegistry::on_startup failed");
+    }
     let session_supervisor = Arc::new(tokio::sync::Mutex::new(
         nephila_lifecycle::SessionSupervisor::new(sqlite_store.clone(), config.supervision.clone()),
     ));
