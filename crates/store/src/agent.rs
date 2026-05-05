@@ -55,38 +55,49 @@ impl AgentStore for SqliteStore {
     }
 
     async fn get(&self, id: AgentId) -> nephila_core::Result<Option<Agent>> {
-        let record = self
-            .writer
-            .execute(move |conn| {
-                let mut stmt = conn.prepare(
+        let pool = self.read_pool.clone();
+        let record = tokio::task::spawn_blocking(move || -> nephila_core::Result<Option<Agent>> {
+            let conn = pool
+                .acquire_guarded()
+                .map_err(|e| nephila_core::NephilaError::Storage(format!("read pool: {e}")))?;
+            let mut stmt = conn
+                .prepare_cached(
                     "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id, last_config_snapshot
                      FROM agents WHERE id = ?1",
-                )?;
-                let result = stmt.query_row(rusqlite::params![id], row_to_agent);
-                match result {
-                    Ok(agent) => Ok(Some(agent)),
-                    Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                    Err(e) => Err(e),
-                }
-            })
-            .await?;
+                )
+                .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?;
+            match stmt.query_row(rusqlite::params![id], row_to_agent) {
+                Ok(agent) => Ok(Some(agent)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(nephila_core::NephilaError::Storage(e.to_string())),
+            }
+        })
+        .await
+        .map_err(|e| nephila_core::NephilaError::Storage(format!("join: {e}")))??;
         Ok(record)
     }
 
     async fn list(&self) -> nephila_core::Result<Vec<Agent>> {
-        let records = self
-            .writer
-            .execute(|conn| {
-                let mut stmt = conn.prepare(
+        let pool = self.read_pool.clone();
+        let records = tokio::task::spawn_blocking(move || -> nephila_core::Result<Vec<Agent>> {
+            let conn = pool
+                .acquire_guarded()
+                .map_err(|e| nephila_core::NephilaError::Storage(format!("read pool: {e}")))?;
+            let mut stmt = conn
+                .prepare_cached(
                     "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id, last_config_snapshot
                      FROM agents ORDER BY created_at",
-                )?;
-                let rows = stmt
-                    .query_map([], row_to_agent)?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await?;
+                )
+                .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?;
+            let rows = stmt
+                .query_map([], row_to_agent)
+                .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?;
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| nephila_core::NephilaError::Storage(format!("join: {e}")))??;
         Ok(records)
     }
 
@@ -154,23 +165,26 @@ impl AgentStore for SqliteStore {
     }
 
     async fn get_directive(&self, id: AgentId) -> nephila_core::Result<Directive> {
-        let directive = self
-            .writer
-            .execute(move |conn| {
-                match conn.query_row(
-                    "SELECT directive FROM agents WHERE id = ?1",
-                    rusqlite::params![id],
-                    |row| {
-                        let s: String = row.get(0)?;
-                        Ok(s.parse::<Directive>().unwrap_or(Directive::Continue))
-                    },
-                ) {
+        let pool = self.read_pool.clone();
+        let directive =
+            tokio::task::spawn_blocking(move || -> nephila_core::Result<Option<Directive>> {
+                let conn = pool
+                    .acquire_guarded()
+                    .map_err(|e| nephila_core::NephilaError::Storage(format!("read pool: {e}")))?;
+                let mut stmt = conn
+                    .prepare_cached("SELECT directive FROM agents WHERE id = ?1")
+                    .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?;
+                match stmt.query_row(rusqlite::params![id], |row| {
+                    let s: String = row.get(0)?;
+                    Ok(s.parse::<Directive>().unwrap_or(Directive::Continue))
+                }) {
                     Ok(d) => Ok(Some(d)),
                     Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                    Err(e) => Err(e),
+                    Err(e) => Err(nephila_core::NephilaError::Storage(e.to_string())),
                 }
             })
-            .await?;
+            .await
+            .map_err(|e| nephila_core::NephilaError::Storage(format!("join: {e}")))??;
         directive.ok_or(nephila_core::NephilaError::AgentNotFound(id))
     }
 
@@ -247,21 +261,28 @@ impl SqliteStore {
     /// `SessionRegistry::on_startup` to decide which agents to resume after
     /// an orchestrator restart.
     pub async fn list_agents_in_active_phase(&self) -> nephila_core::Result<Vec<Agent>> {
-        let records = self
-            .writer
-            .execute(|conn| {
-                let mut stmt = conn.prepare(
+        let pool = self.read_pool.clone();
+        let records = tokio::task::spawn_blocking(move || -> nephila_core::Result<Vec<Agent>> {
+            let conn = pool
+                .acquire_guarded()
+                .map_err(|e| nephila_core::NephilaError::Storage(format!("read pool: {e}")))?;
+            let mut stmt = conn
+                .prepare_cached(
                     "SELECT id, state, directory, objective_id, checkpoint_id, spawned_by, injected_message, created_at, updated_at, directive, session_id, spawn_origin_type, source_checkpoint_id, restore_checkpoint_id, last_config_snapshot
                      FROM agents
                      WHERE state IN ('starting', 'active', 'paused', 'suspending')
                      ORDER BY created_at",
-                )?;
-                let rows = stmt
-                    .query_map([], row_to_agent)?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await?;
+                )
+                .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?;
+            let rows = stmt
+                .query_map([], row_to_agent)
+                .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| nephila_core::NephilaError::Storage(e.to_string()))?;
+            Ok(rows)
+        })
+        .await
+        .map_err(|e| nephila_core::NephilaError::Storage(format!("join: {e}")))??;
         Ok(records)
     }
 }

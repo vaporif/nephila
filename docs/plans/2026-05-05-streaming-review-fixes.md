@@ -1404,7 +1404,7 @@ This mirrors `load_events_from_pool` (around line 342). For the `agent.rs` metho
 
 **Scope cap:** Tracing-store reads (`tracing_store.rs`) and `save_snapshot` (a write) are out of scope. Cover the eight read methods listed above. Tracing reads are a follow-up.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `crates/store/tests/snapshot_does_not_block_writer.rs` (the `make_test_envelope` helper from Task 9 is already in scope). Use `nephila_core::store::AgentStore` to call `list` (the actual method name; `store.list_agents()` does not exist).
 
@@ -1441,12 +1441,12 @@ async fn agent_list_not_starved_during_long_append() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p nephila-store --test snapshot_does_not_block_writer agent_list_not_starved -- --nocapture`
 Expected: FAIL — read blocked behind the writer's append batch.
 
-- [ ] **Step 3: Refactor each read method**
+- [x] **Step 3: Refactor each read method**
 
 For each method, swap the `self.writer.execute(...)` body for the `spawn_blocking` + `acquire_guarded` pattern shown in the Background section. Read each method's existing body BEFORE editing — some take owned args (good — clone them once at top), some borrow `&self` deeply (use `let pool = self.read_pool.clone()` and `to_owned()` the borrowed args before moving into `spawn_blocking`).
 
@@ -1498,22 +1498,22 @@ Note the `??` at the end — outer `?` for the `JoinError`, inner `?` for the in
 
 For `load_latest_snapshot` (returns `Result<Option<Snapshot>, EventStoreError>`), the inner closure returns `Result<Option<Snapshot>, EventStoreError>`; preserve the `Option` via `query_row(...).optional()` or by matching on `QueryReturnedNoRows` exactly as the current code does.
 
-- [ ] **Step 4: Run the read-blocking test**
+- [x] **Step 4: Run the read-blocking test**
 
 Run: `cargo test -p nephila-store --test snapshot_does_not_block_writer -- --nocapture`
 Expected: PASS for both the snapshot test (Task 9) and the new agent_list test.
 
-- [ ] **Step 5: Run the full store + downstream suite**
+- [x] **Step 5: Run the full store + downstream suite**
 
 Run: `cargo test -p nephila-store -p nephila-lifecycle -p nephila --tests -- --nocapture`
 Expected: PASS — especially `read_pool_concurrent`, `read_pool_panic_safety`, `subscribe_after_ordering`, `respawn_e2e`.
 
-- [ ] **Step 6: Run cargo check + clippy**
+- [x] **Step 6: Run cargo check + clippy**
 
 Run: `cargo check --workspace && cargo clippy --workspace -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```
 git add crates/store/src/domain_event.rs crates/store/src/agent.rs crates/store/tests/snapshot_does_not_block_writer.rs

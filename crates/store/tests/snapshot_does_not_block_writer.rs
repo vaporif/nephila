@@ -8,6 +8,7 @@
 
 use chrono::Utc;
 use nephila_core::session_event::SessionEvent;
+use nephila_core::store::AgentStore;
 use nephila_eventsourcing::envelope::EventEnvelope;
 use nephila_eventsourcing::id::{EventId, TraceId};
 use nephila_eventsourcing::store::DomainEventStore;
@@ -87,5 +88,41 @@ async fn append_not_starved_during_snapshot_replay() {
     assert!(
         append_latency < Duration::from_millis(50),
         "append blocked by snapshot: {append_latency:?}"
+    );
+}
+
+/// Regression: `AgentStore::list` (and the other read methods on the store)
+/// must not be serialised behind a long-running write batch. With the old
+/// behaviour, every read went through the writer thread, so a slow append
+/// batch starved concurrent reads. Reads now flow through the read pool;
+/// this test pins that.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_list_not_starved_during_long_append() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("db.sqlite");
+    let store = Arc::new(SqliteStore::open(&path, 384).unwrap());
+
+    // Kick off a slow append in the background. 30k rows is enough to keep
+    // the writer thread busy long enough that a writer-routed read would
+    // queue behind it for tens of milliseconds.
+    let store_clone = Arc::clone(&store);
+    let big_batch: Vec<_> = (0..30_000)
+        .map(|i| make_test_envelope("agg", &format!("m{i}")))
+        .collect();
+    let writer_task =
+        tokio::spawn(async move { store_clone.append_batch(big_batch).await.unwrap() });
+
+    // Give the writer a head start so the read fires while it's still busy.
+    tokio::time::sleep(Duration::from_millis(2)).await;
+
+    let start = Instant::now();
+    let _ = AgentStore::list(&*store).await.unwrap();
+    let read_latency = start.elapsed();
+
+    writer_task.await.unwrap();
+
+    assert!(
+        read_latency < Duration::from_millis(20),
+        "read blocked by writer: {read_latency:?}"
     );
 }

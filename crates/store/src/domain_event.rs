@@ -53,52 +53,60 @@ impl DomainEventStore for SqliteStore {
         aggregate_id: &str,
         since_sequence: u64,
     ) -> Result<Vec<EventEnvelope>, EventStoreError> {
-        let agg_type = aggregate_type.to_string();
-        let agg_id = aggregate_id.to_string();
-        let envelopes = self
-            .writer
-            .execute(move |conn| {
-                let mut stmt = conn.prepare(
+        let pool = self.read_pool.clone();
+        let agg_type = aggregate_type.to_owned();
+        let agg_id = aggregate_id.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<Vec<EventEnvelope>, EventStoreError> {
+            let conn = pool
+                .acquire_guarded()
+                .map_err(|_| EventStoreError::PoolExhausted)?;
+            let mut stmt = conn
+                .prepare_cached(
                     "SELECT id, aggregate_type, aggregate_id, sequence, event_type, payload, trace_id, outcome, timestamp, context_snapshot, metadata
                      FROM domain_events
                      WHERE aggregate_type = ?1 AND aggregate_id = ?2 AND sequence > ?3
                      ORDER BY sequence ASC",
-                )?;
-                let rows = stmt
-                    .query_map(
-                        rusqlite::params![agg_type, agg_id, since_sequence as i64],
-                        row_to_envelope,
-                    )?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await
-            .map_err(|e| EventStoreError::Storage(e.to_string()))?;
-        Ok(envelopes)
+                )
+                .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+            let rows: Result<Vec<EventEnvelope>, rusqlite::Error> = stmt
+                .query_map(
+                    rusqlite::params![agg_type, agg_id, since_sequence as i64],
+                    row_to_envelope,
+                )
+                .map_err(|e| EventStoreError::Storage(e.to_string()))?
+                .collect();
+            rows.map_err(|e| EventStoreError::Storage(e.to_string()))
+        })
+        .await
+        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
     }
 
     async fn load_by_trace_id(
         &self,
         trace_id: &TraceId,
     ) -> Result<Vec<EventEnvelope>, EventStoreError> {
+        let pool = self.read_pool.clone();
         let tid = trace_id.0.clone();
-        let envelopes = self
-            .writer
-            .execute(move |conn| {
-                let mut stmt = conn.prepare(
+        tokio::task::spawn_blocking(move || -> Result<Vec<EventEnvelope>, EventStoreError> {
+            let conn = pool
+                .acquire_guarded()
+                .map_err(|_| EventStoreError::PoolExhausted)?;
+            let mut stmt = conn
+                .prepare_cached(
                     "SELECT id, aggregate_type, aggregate_id, sequence, event_type, payload, trace_id, outcome, timestamp, context_snapshot, metadata
                      FROM domain_events
                      WHERE trace_id = ?1
                      ORDER BY timestamp ASC",
-                )?;
-                let rows = stmt
-                    .query_map(rusqlite::params![tid], row_to_envelope)?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await
-            .map_err(|e| EventStoreError::Storage(e.to_string()))?;
-        Ok(envelopes)
+                )
+                .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+            let rows: Result<Vec<EventEnvelope>, rusqlite::Error> = stmt
+                .query_map(rusqlite::params![tid], row_to_envelope)
+                .map_err(|e| EventStoreError::Storage(e.to_string()))?
+                .collect();
+            rows.map_err(|e| EventStoreError::Storage(e.to_string()))
+        })
+        .await
+        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
     }
 
     async fn load_by_time_range(
@@ -106,25 +114,29 @@ impl DomainEventStore for SqliteStore {
         from: DateTime<Utc>,
         to: DateTime<Utc>,
     ) -> Result<Vec<EventEnvelope>, EventStoreError> {
+        let pool = self.read_pool.clone();
         let from_str = from.to_rfc3339();
         let to_str = to.to_rfc3339();
-        let envelopes = self
-            .writer
-            .execute(move |conn| {
-                let mut stmt = conn.prepare(
+        tokio::task::spawn_blocking(move || -> Result<Vec<EventEnvelope>, EventStoreError> {
+            let conn = pool
+                .acquire_guarded()
+                .map_err(|_| EventStoreError::PoolExhausted)?;
+            let mut stmt = conn
+                .prepare_cached(
                     "SELECT id, aggregate_type, aggregate_id, sequence, event_type, payload, trace_id, outcome, timestamp, context_snapshot, metadata
                      FROM domain_events
                      WHERE timestamp >= ?1 AND timestamp <= ?2
                      ORDER BY timestamp ASC",
-                )?;
-                let rows = stmt
-                    .query_map(rusqlite::params![from_str, to_str], row_to_envelope)?
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(rows)
-            })
-            .await
-            .map_err(|e| EventStoreError::Storage(e.to_string()))?;
-        Ok(envelopes)
+                )
+                .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+            let rows: Result<Vec<EventEnvelope>, rusqlite::Error> = stmt
+                .query_map(rusqlite::params![from_str, to_str], row_to_envelope)
+                .map_err(|e| EventStoreError::Storage(e.to_string()))?
+                .collect();
+            rows.map_err(|e| EventStoreError::Storage(e.to_string()))
+        })
+        .await
+        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
     }
 
     async fn save_snapshot(&self, snapshot: &Snapshot) -> Result<(), EventStoreError> {
@@ -154,28 +166,30 @@ impl DomainEventStore for SqliteStore {
         aggregate_type: &str,
         aggregate_id: &str,
     ) -> Result<Option<Snapshot>, EventStoreError> {
-        let agg_type = aggregate_type.to_string();
-        let agg_id = aggregate_id.to_string();
-        let snapshot = self
-            .writer
-            .execute(move |conn| {
-                let mut stmt = conn.prepare(
+        let pool = self.read_pool.clone();
+        let agg_type = aggregate_type.to_owned();
+        let agg_id = aggregate_id.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<Option<Snapshot>, EventStoreError> {
+            let conn = pool
+                .acquire_guarded()
+                .map_err(|_| EventStoreError::PoolExhausted)?;
+            let mut stmt = conn
+                .prepare_cached(
                     "SELECT aggregate_type, aggregate_id, sequence, state, timestamp
                      FROM aggregate_snapshots
                      WHERE aggregate_type = ?1 AND aggregate_id = ?2
                      ORDER BY sequence DESC
                      LIMIT 1",
-                )?;
-                let mut rows =
-                    stmt.query_map(rusqlite::params![agg_type, agg_id], row_to_snapshot)?;
-                match rows.next() {
-                    Some(row) => Ok(Some(row?)),
-                    None => Ok(None),
-                }
-            })
-            .await
-            .map_err(|e| EventStoreError::Storage(e.to_string()))?;
-        Ok(snapshot)
+                )
+                .map_err(|e| EventStoreError::Storage(e.to_string()))?;
+            match stmt.query_row(rusqlite::params![agg_type, agg_id], row_to_snapshot) {
+                Ok(snap) => Ok(Some(snap)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(EventStoreError::Storage(e.to_string())),
+            }
+        })
+        .await
+        .map_err(|e| EventStoreError::Storage(format!("join: {e}")))?
     }
 
     async fn subscribe_after(
