@@ -261,11 +261,11 @@ git commit -m "fix(registry): crash-watch uses resilient_subscribe (CR-001)"
 
 **Background:** Currently `on_startup` runs BEFORE `start_crash_fallback_listener`. If a resume during boot itself triggers a crash, the connector's reader will `try_send` the agent_id into the bounded (cap 64) fallback channel — the send succeeds, but no listener is draining yet, so the message just sits in the buffer until later. If the bound is exceeded before the listener spawns, sends are silently dropped. Reorder so the listener is up before any session can produce events. The existing `start_crash_fallback_listener` is idempotent (it `take()`s the receiver under a mutex), so a single early call is sufficient.
 
-- [ ] **Step 1: Read the current sequence in `bin/src/main.rs`**
+- [x] **Step 1: Read the current sequence in `bin/src/main.rs`**
 
 Grep for `start_crash_fallback_listener` to find the current location. Expected order today: `let session_registry = ...; session_registry.on_startup().await; ...; session_registry.clone().start_crash_fallback_listener().await;`.
 
-- [ ] **Step 2: Reorder**
+- [x] **Step 2: Reorder**
 
 Move the `start_crash_fallback_listener()` call to BEFORE `on_startup()`. The listener's `JoinHandle` must be retained for the lifetime of `main` (the existing code binds it to `_crash_fallback_handle`; preserve that). The `on_startup` call already wraps its error in `if let Err(e) = ... { tracing::warn!(...) }` — preserve that too. The new order:
 
@@ -280,17 +280,17 @@ if let Err(e) = session_registry.on_startup().await {
 }
 ```
 
-- [ ] **Step 3: Run the orchestrator boot test**
+- [x] **Step 3: Run the orchestrator boot test**
 
 Run: `cargo test -p nephila --test respawn_e2e -- --nocapture`
 Expected: PASS (no behavioral test specifically covers the listener-before-startup race; this regression check is just to ensure the reorder didn't break boot).
 
-- [ ] **Step 4: Manual smoke**
+- [x] **Step 4: Manual smoke**
 
 Run: `cargo build -p nephila`
 Expected: clean build.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```
 git add bin/src/main.rs
