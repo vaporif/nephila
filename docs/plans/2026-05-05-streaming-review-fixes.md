@@ -243,7 +243,7 @@ Expected: PASS for `crash_watch_recovers_session_crashed_after_broadcast_lag` AN
 Run: `cargo check -p nephila && cargo clippy -p nephila -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git add bin/src/session_registry.rs bin/tests/respawn_e2e.rs
