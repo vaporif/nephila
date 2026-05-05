@@ -689,7 +689,7 @@ git commit -m "fix(supervisor): TurnCompleted/TurnAborted filter by turn_id (H-C
 
 The actual enum (`crates/core/src/command.rs`) has 11 variants: `Spawn { objective_id, content, dir }`, `SpawnAgent { objective_id, content, dir, spawned_by }`, `Kill { agent_id }`, `Pause { agent_id }`, `Resume { agent_id }`, `Suspend { agent_id }`, `HitlRespond { agent_id, response }`, `TokenThreshold { agent_id, directive }`, `AgentExited { agent_id, success }`, `Respawn { objective_id, content, dir, restore_checkpoint_id }`. The sensitive fields are `content` (in `Spawn`/`SpawnAgent`/`Respawn`) and `response` (in `HitlRespond`).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `crates/core/tests/command_debug.rs`:
 
@@ -757,12 +757,12 @@ fn debug_passes_through_pure_id_variants() {
 
 Verify the constructor names — `ObjectiveId::new()`, `CheckpointId::new()`, `AgentId::new()` — exist by grepping `crates/core/src/id.rs`. If any uses a different constructor (e.g. `default()` or `from_uuid`), adjust.
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p nephila-core --test command_debug -- --nocapture`
 Expected: FAIL on each redaction assertion — `derive(Debug)` prints the strings.
 
-- [ ] **Step 3: Replace `derive(Debug)` with a manual impl**
+- [x] **Step 3: Replace `derive(Debug)` with a manual impl**
 
 In `crates/core/src/command.rs`, change `#[derive(Debug)]` to nothing on the enum (remove only `Debug`; keep any other derives if added later). Below the enum, add the impl with ALL 11 variants enumerated — Rust requires exhaustiveness, no `_` arm:
 
@@ -828,17 +828,17 @@ impl std::fmt::Debug for OrchestratorCommand {
 
 If any variant has been added since this plan was written, the missing match arm will be a compile error — add it with the same passthrough shape (or with content-redaction if it carries a sensitive field).
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cargo test -p nephila-core --test command_debug -- --nocapture`
 Expected: PASS.
 
-- [ ] **Step 5: Run cargo check + clippy across crates that import the enum**
+- [x] **Step 5: Run cargo check + clippy across crates that import the enum**
 
 Run: `cargo check -p nephila-core -p nephila && cargo clippy -p nephila-core -- -D warnings`
 Expected: clean. (If `nephila-mcp` or other crates also import `OrchestratorCommand`, add them — grep for `OrchestratorCommand` first.)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git add crates/core/src/command.rs crates/core/tests/command_debug.rs
