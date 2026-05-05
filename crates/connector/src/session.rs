@@ -30,6 +30,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use chrono::Utc;
@@ -649,15 +650,28 @@ async fn stderr_drain_task(stderr: tokio::process::ChildStderr, ring: StderrRing
     }
 }
 
+static REDACTION_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"(?i)(sk-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|Bearer\s+[A-Za-z0-9._~+/=-]{20,}|(api[_-]?key|secret|token|password)[=:]\s*\S+)",
+    )
+    .expect("redaction regex compiles")
+});
+
+#[must_use]
+pub fn redact_stderr(s: &str) -> String {
+    REDACTION_RE.replace_all(s, "<redacted>").into_owned()
+}
+
 fn snapshot_stderr_tail(ring: &StderrRing) -> String {
-    ring.lock().map_or_else(
+    let joined = ring.lock().map_or_else(
         |_| String::new(),
         |g| {
             let n = g.len().min(STDERR_TAIL_LINES);
             let start = g.len() - n;
             g.iter().skip(start).cloned().collect::<Vec<_>>().join("\n")
         },
-    )
+    );
+    redact_stderr(&joined)
 }
 
 #[allow(clippy::too_many_arguments)]

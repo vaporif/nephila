@@ -20,5 +20,6 @@ pub use error::ConnectorError;
 pub use hitl::{HitlHandler, HitlRequest as ConnectorHitlRequest, HitlResponse};
 pub use message::MessageConnector;
 pub use openai_compatible::OpenAiCompatibleConnector;
+pub use session::redact_stderr;
 pub use task::{ProcessHandle, TaskConnector, TaskHandle, TaskResult, TaskStatus};
 pub use types::{ContentBlock, Message, Response, Role, StopReason, ToolDefinition, Usage};

@@ -868,7 +868,7 @@ git commit -m "fix(security): redact OrchestratorCommand Debug to prevent prompt
 Pros: cheap (single regex pass on ~32 lines); catches the common cases.
 Cons: a credential without a recognizable prefix and not in `key=value` form would still leak. Acceptable trade-off.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `crates/connector/tests/stderr_redaction.rs`:
 
@@ -914,12 +914,12 @@ fn redact_keeps_long_hashes() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test -p nephila-connector --test stderr_redaction -- --nocapture`
 Expected: compile failure — `redact_stderr` not defined.
 
-- [ ] **Step 3: Add `regex` to `crates/connector/Cargo.toml`**
+- [x] **Step 3: Add `regex` to `crates/connector/Cargo.toml`**
 
 Check first — `regex` may already be a workspace dep. If not, add to `crates/connector/Cargo.toml`:
 
@@ -930,7 +930,7 @@ regex = { workspace = true }
 
 (Or add a direct version pin if no workspace entry exists. `regex = "1.10"` is fine.)
 
-- [ ] **Step 4: Implement `redact_stderr` in `crates/connector/src/session.rs`**
+- [x] **Step 4: Implement `redact_stderr` in `crates/connector/src/session.rs`**
 
 Add at the top of the file (after existing `use` lines):
 
@@ -964,22 +964,22 @@ Re-export from `crates/connector/src/lib.rs` so the test can import it:
 pub use session::redact_stderr;
 ```
 
-- [ ] **Step 5: Run the redaction tests**
+- [x] **Step 5: Run the redaction tests**
 
 Run: `cargo test -p nephila-connector --test stderr_redaction -- --nocapture`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full connector test suite**
+- [x] **Step 6: Run the full connector test suite**
 
 Run: `cargo test -p nephila-connector -- --nocapture`
 Expected: PASS — including session_smoke, resume_e2e, session_pause.
 
-- [ ] **Step 7: Run cargo check + clippy**
+- [x] **Step 7: Run cargo check + clippy**
 
 Run: `cargo check -p nephila-connector && cargo clippy -p nephila-connector -- -D warnings`
 Expected: clean.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```
 git add crates/connector/src/session.rs crates/connector/src/lib.rs crates/connector/Cargo.toml crates/connector/tests/stderr_redaction.rs
@@ -1147,7 +1147,7 @@ git commit -m "fix(connector): drain tool_names on plain ToolResult arm (H-S3)"
 
 Auto-selected — these are conservative SQLite tuning defaults from sqlite.org's "Performance Tuning" guide. No downsides for the workload.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `crates/store/tests/pragma_settings.rs`:
 
@@ -1180,12 +1180,12 @@ Per-connection pragmas (`cache_size`, `temp_store`, `mmap_size`, `wal_autocheckp
 
 If a stronger test is wanted, expose `apply_tuning_pragmas` as `pub` (not `pub(crate)`) and unit-test it directly: open a `Connection`, call `apply_tuning_pragmas(&conn)`, then `pragma_query_value` to confirm each one. That's lightly tighter coupling for a clearer signal.
 
-- [ ] **Step 2: Run test to verify it fails (or trivially pass for the persistent-only assertion)**
+- [x] **Step 2: Run test to verify it fails (or trivially pass for the persistent-only assertion)**
 
 Run: `cargo test -p nephila-store --test pragma_settings -- --nocapture`
 The journal_mode assertion already passes with current code (WAL is set in `lib.rs:84`). This is intentional — the test exists to lock in the open-path contract; the meaningful regression coverage comes from running the full store suite after the pragma helper is in place.
 
-- [ ] **Step 3: Add a shared `apply_tuning_pragmas` helper**
+- [x] **Step 3: Add a shared `apply_tuning_pragmas` helper**
 
 Add to `crates/store/src/schema.rs` (or a new helper module):
 
@@ -1200,7 +1200,7 @@ pub(crate) fn apply_tuning_pragmas(conn: &rusqlite::Connection) -> rusqlite::Res
 }
 ```
 
-- [ ] **Step 4: Call the helper from FILE-BACKED connection sites only**
+- [x] **Step 4: Call the helper from FILE-BACKED connection sites only**
 
 File paths (apply tuning):
 - `crates/store/src/lib.rs` — inside `SqliteStore::open` (after the existing `journal_mode=WAL` + `foreign_keys=ON` calls): `crate::schema::apply_tuning_pragmas(&conn)?;`
@@ -1213,17 +1213,17 @@ In-memory paths (DO NOT add tuning pragmas):
 
 This keeps the in-memory cross-connection visibility behavior intact for tests.
 
-- [ ] **Step 5: Run the test**
+- [x] **Step 5: Run the test**
 
 Run: `cargo test -p nephila-store --test pragma_settings -- --nocapture`
 Expected: PASS.
 
-- [ ] **Step 6: Run the full store suite**
+- [x] **Step 6: Run the full store suite**
 
 Run: `cargo test -p nephila-store -- --nocapture`
 Expected: PASS.
 
-- [ ] **Step 7: Run cargo check + clippy**
+- [x] **Step 7: Run cargo check + clippy**
 
 Run: `cargo check -p nephila-store && cargo clippy -p nephila-store -- -D warnings`
 Expected: clean.
