@@ -208,6 +208,12 @@ async fn main() -> Result<()> {
     if let Err(e) = session_registry.on_startup().await {
         tracing::warn!(%e, "SessionRegistry::on_startup failed");
     }
+    // The autonomy supervisor is sharded: each `attach_session` call spawns
+    // a dedicated `PerSessionLoop` task that owns its own state. The outer
+    // `SessionSupervisor` holds the per-session `JoinHandle`s. We wrap it in
+    // a `tokio::sync::Mutex` only because the broadcast-receiver task below
+    // needs `&mut` access on each `attach_session`; the lock is held only
+    // briefly per spawn and never crosses any per-session loop's `.await`.
     let session_supervisor = Arc::new(tokio::sync::Mutex::new(
         nephila_lifecycle::SessionSupervisor::new(
             Arc::clone(&sqlite_store),
@@ -216,18 +222,26 @@ async fn main() -> Result<()> {
     ));
     {
         let registry = Arc::clone(&session_registry);
-        let _supervisor = Arc::clone(&session_supervisor);
+        let supervisor = Arc::clone(&session_supervisor);
         tasks.spawn(async move {
             let mut new_agents_rx = registry.subscribe_session_started();
             loop {
                 match new_agents_rx.recv().await {
                     Ok(agent_id) => {
-                        // SessionSupervisor wiring is parked here: the
-                        // `JoinSet`/`run_per_session` plumbing depends on
-                        // production code paths that are not yet hooked up.
-                        // The legacy `LifecycleSupervisor` handles session
-                        // traffic in the meantime.
-                        tracing::debug!(%agent_id, "SessionSupervisor wiring parked");
+                        let Some(session) = registry.session(agent_id) else {
+                            tracing::warn!(%agent_id, "session_started fired but no session in registry; skipping attach");
+                            continue;
+                        };
+                        let Some(session_id) = registry.session_id_of(agent_id) else {
+                            tracing::warn!(%agent_id, "session_started fired but no session_id; skipping attach");
+                            continue;
+                        };
+                        let driver = nephila_lifecycle::ClaudeCodeDriver::new(session);
+                        supervisor
+                            .lock()
+                            .await
+                            .attach_session(agent_id, session_id, driver);
+                        tracing::debug!(%agent_id, %session_id, "attached SessionSupervisor per-session loop");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(%n, "SessionRegistry lagged");

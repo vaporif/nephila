@@ -150,6 +150,21 @@ impl SessionRegistry {
         self.started_tx.subscribe()
     }
 
+    /// Read-only accessor for the live `Arc<ClaudeCodeSession>` bound to an
+    /// agent. Returns `None` if no session is currently registered.
+    /// Used by `nephila_lifecycle::SessionSupervisor::attach_session` to
+    /// build a `ClaudeCodeDriver` over the same Arc the registry holds.
+    #[must_use]
+    pub fn session(&self, agent_id: AgentId) -> Option<Arc<ClaudeCodeSession>> {
+        self.sessions.get(&agent_id).map(|h| Arc::clone(&h.session))
+    }
+
+    /// Read-only accessor for the live `SessionId` bound to an agent.
+    #[must_use]
+    pub fn session_id_of(&self, agent_id: AgentId) -> Option<Uuid> {
+        self.session_ids.get(&agent_id).map(|r| *r.value())
+    }
+
     /// Test-only: fire `started_tx` without spawning a session. Production
     /// code goes through `ensure_session`, which fires the broadcast itself.
     #[cfg(test)]

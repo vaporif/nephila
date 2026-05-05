@@ -470,6 +470,18 @@ impl ClaudeCodeSession {
     /// shutdown — the store-side Trigger B catches up on the next subscribe.
     #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
     pub async fn shutdown(self) -> Result<(), ConnectorError> {
+        self.shutdown_in_place().await
+    }
+
+    /// Same teardown as [`Self::shutdown`] but takes `&self`, so it can be
+    /// invoked through an `Arc<ClaudeCodeSession>` (used by
+    /// `nephila_lifecycle::ClaudeCodeDriver` on a `Drain` interrupt).
+    ///
+    /// Idempotent: the `JoinHandle`s and child are stored in
+    /// `Mutex<Option<_>>` and `take()`-ed on first call, so re-entry is a
+    /// no-op for everything except the (cheap) flag and cancel-token writes.
+    #[tracing::instrument(level = "debug", skip(self), fields(session_id = %self.session_id))]
+    pub async fn shutdown_in_place(&self) -> Result<(), ConnectorError> {
         // Order matters: `shutting_down` MUST be set before we cancel and
         // before SIGTERM lands. Release ordering ensures the reader's
         // Acquire load observes this write before its EOF/parse-error

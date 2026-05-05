@@ -2621,7 +2621,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "futures",
+ "nephila-connector",
  "nephila-core",
+ "nephila-eventsourcing",
  "nephila-store",
  "proptest",
  "serde_json",

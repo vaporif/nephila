@@ -1,6 +1,6 @@
 //! Property test for the (CheckpointReached, TurnCompleted) pairing state machine.
 //!
-//! Drives arbitrary interleavings of `SessionEvent`s through `SessionSupervisor`
+//! Drives arbitrary interleavings of `SessionEvent`s through `PerSessionLoop`
 //! and asserts the invariants that protect against race conditions in the
 //! checkpoint-driven autonomy loop:
 //!
@@ -16,9 +16,12 @@
 use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
+use nephila_core::config::SupervisionConfig;
 use nephila_core::id::{AgentId, CheckpointId};
 use nephila_core::session_event::{InterruptSnapshot, SessionEvent};
-use nephila_lifecycle::session_supervisor::{SessionDriver, SessionSupervisor, SupervisorAction};
+use nephila_lifecycle::session_supervisor::{
+    DriverError, PerSessionLoop, SessionDriver, SupervisorAction,
+};
 use proptest::prelude::*;
 use uuid::Uuid;
 
@@ -40,27 +43,39 @@ struct FakeDriver {
 }
 
 impl SessionDriver for FakeDriver {
-    fn send_agent_prompt(&self, _prompt: String) {
+    async fn send_agent_prompt(&self, _prompt: String) -> Result<(), DriverError> {
         self.log
             .lock()
             .expect("call log poisoned")
             .actions
             .push(RecordedAction::SendTurnAgent);
+        Ok(())
     }
-    fn pause(&self) {
+    async fn pause(&self) -> Result<(), DriverError> {
         self.log
             .lock()
             .expect("call log poisoned")
             .actions
             .push(RecordedAction::Pause);
+        Ok(())
     }
-    fn shutdown(&self) {
+    async fn shutdown(&self) -> Result<(), DriverError> {
         self.log
             .lock()
             .expect("call log poisoned")
             .actions
             .push(RecordedAction::Shutdown);
+        Ok(())
     }
+}
+
+fn fresh_loop(driver: FakeDriver) -> PerSessionLoop<FakeDriver> {
+    PerSessionLoop::new(
+        AgentId::new(),
+        Uuid::new_v4(),
+        driver,
+        SupervisionConfig::default(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -144,6 +159,25 @@ fn realize_event(g: &EventGen, open_turn: &mut Option<Uuid>) -> SessionEvent {
     }
 }
 
+/// Each proptest case constructs its own current-thread runtime and drives
+/// the (now async) `handle_event` via `block_on`. This is cheaper than
+/// reusing a global runtime under proptest because each case is independent
+/// and a current-thread runtime tears down quickly.
+fn run_case(events: &[SessionEvent]) -> Vec<RecordedAction> {
+    let driver = FakeDriver::default();
+    let mut loop_state = fresh_loop(driver.clone());
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("build runtime");
+    runtime.block_on(async {
+        for ev in events {
+            let _ = loop_state.handle_event(ev).await;
+        }
+    });
+    let log = driver.log.lock().expect("log");
+    log.actions.clone()
+}
+
 proptest! {
     #![proptest_config(ProptestConfig {
         cases: 64,
@@ -152,25 +186,23 @@ proptest! {
 
     #[test]
     fn checkpoint_pairing_invariants(seq in proptest::collection::vec(arb_event(), 0..32)) {
-        let driver = FakeDriver::default();
-        let agent_id = AgentId::new();
-        let session_id = Uuid::new_v4();
-        let mut sup = SessionSupervisor::new_for_test();
-        sup.attach_session_for_test(agent_id, session_id, driver.clone());
-
         let mut open_turn: Option<Uuid> = None;
         let mut events: Vec<SessionEvent> = Vec::with_capacity(seq.len());
         for g in &seq {
             events.push(realize_event(g, &mut open_turn));
         }
 
-        // Track when an active turn is open vs closed via the producing path
-        // (PromptDelivered opens, TurnCompleted/TurnAborted close).
+        // Drive each prefix and snapshot the action log so we can attribute
+        // each new action to the event that produced it.
+        let driver = FakeDriver::default();
+        let mut loop_state = fresh_loop(driver.clone());
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("build runtime");
+
         let mut active_turn: Option<Uuid> = None;
-        let mut last_observed_action_idx: usize = 0;
 
         for ev in &events {
-            // Snapshot recorded actions before dispatch.
             let before = driver.log.lock().expect("log").actions.len();
 
             // Close-out events mark the turn closed AT this event — a
@@ -187,14 +219,12 @@ proptest! {
                 _ => {}
             }
 
-            let action = sup.handle_event_for_test(session_id, ev);
+            let action = runtime.block_on(loop_state.handle_event(ev));
 
             let after_actions = driver.log.lock().expect("log").actions.clone();
             let new_actions = &after_actions[before..];
 
-            // Invariant 1: no `send_turn(Agent)` while a turn is active. The
-            // event being processed is allowed to close the turn (see above);
-            // we treat the post-close state as the truth.
+            // Invariant 1: no `send_turn(Agent)` while a turn is active.
             for a in new_actions {
                 if matches!(a, RecordedAction::SendTurnAgent) {
                     prop_assert!(
@@ -231,14 +261,10 @@ proptest! {
                 _ => {}
             }
 
-            // Sanity: the supervisor MUST report some action enum (no panic).
             let _ = action;
-            last_observed_action_idx = after_actions.len();
         }
 
-        // Exhaustively scan actions: no double-shutdown within a single drive
-        // (Drain transitions phase to Ended; subsequent events must short-circuit
-        // via `is_terminal`).
+        // No double-shutdown within a single drive.
         let log = driver.log.lock().expect("log");
         let shutdowns = log
             .actions
@@ -250,30 +276,23 @@ proptest! {
             "double-shutdown; actions = {:?}",
             log.actions,
         );
-
-        // Expose the unused index so clippy doesn't warn.
-        let _ = last_observed_action_idx;
     }
 }
 
 /// Direct unit assertions for the most important invariants — proptest may
 /// not always exercise these specific orderings.
-#[test]
-fn checkpoint_none_then_completed_triggers_one_send_turn() {
+#[tokio::test]
+async fn checkpoint_none_then_completed_triggers_one_send_turn() {
     let driver = FakeDriver::default();
-    let agent_id = AgentId::new();
-    let session_id = Uuid::new_v4();
-    let mut sup = SessionSupervisor::new_for_test();
-    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+    let mut loop_state = fresh_loop(driver.clone());
 
     let turn_id = Uuid::new_v4();
     let now = Utc::now();
 
     // Open a turn (delivered) — should NOT trigger send_turn.
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::AgentPromptDelivered { turn_id, ts: now },
-    );
+    let _ = loop_state
+        .handle_event(&SessionEvent::AgentPromptDelivered { turn_id, ts: now })
+        .await;
     {
         let log = driver.log.lock().expect("log");
         assert!(
@@ -283,14 +302,13 @@ fn checkpoint_none_then_completed_triggers_one_send_turn() {
     }
 
     // Reach a (no-interrupt) checkpoint — still no auto-prompt yet.
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::CheckpointReached {
+    let _ = loop_state
+        .handle_event(&SessionEvent::CheckpointReached {
             checkpoint_id: CheckpointId(Uuid::new_v4()),
             interrupt: None,
             ts: now,
-        },
-    );
+        })
+        .await;
     {
         let log = driver.log.lock().expect("log");
         assert!(
@@ -300,14 +318,13 @@ fn checkpoint_none_then_completed_triggers_one_send_turn() {
     }
 
     // TurnCompleted — pair fires; send_turn(Agent) issued exactly once.
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnCompleted {
+    let _ = loop_state
+        .handle_event(&SessionEvent::TurnCompleted {
             turn_id,
             stop_reason: "end_turn".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
     {
         let log = driver.log.lock().expect("log");
         let n = log
@@ -323,36 +340,30 @@ fn checkpoint_none_then_completed_triggers_one_send_turn() {
     }
 }
 
-#[test]
-fn checkpoint_drain_calls_shutdown() {
+#[tokio::test]
+async fn checkpoint_drain_calls_shutdown() {
     let driver = FakeDriver::default();
-    let agent_id = AgentId::new();
-    let session_id = Uuid::new_v4();
-    let mut sup = SessionSupervisor::new_for_test();
-    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+    let mut loop_state = fresh_loop(driver.clone());
 
     let turn_id = Uuid::new_v4();
     let now = Utc::now();
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::AgentPromptDelivered { turn_id, ts: now },
-    );
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::CheckpointReached {
+    let _ = loop_state
+        .handle_event(&SessionEvent::AgentPromptDelivered { turn_id, ts: now })
+        .await;
+    let _ = loop_state
+        .handle_event(&SessionEvent::CheckpointReached {
             checkpoint_id: CheckpointId(Uuid::new_v4()),
             interrupt: Some(InterruptSnapshot::Drain),
             ts: now,
-        },
-    );
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnCompleted {
+        })
+        .await;
+    let _ = loop_state
+        .handle_event(&SessionEvent::TurnCompleted {
             turn_id,
             stop_reason: "end_turn".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
 
     let log = driver.log.lock().expect("log");
     assert!(
@@ -367,36 +378,30 @@ fn checkpoint_drain_calls_shutdown() {
     );
 }
 
-#[test]
-fn checkpoint_pause_calls_pause() {
+#[tokio::test]
+async fn checkpoint_pause_calls_pause() {
     let driver = FakeDriver::default();
-    let agent_id = AgentId::new();
-    let session_id = Uuid::new_v4();
-    let mut sup = SessionSupervisor::new_for_test();
-    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+    let mut loop_state = fresh_loop(driver.clone());
 
     let turn_id = Uuid::new_v4();
     let now = Utc::now();
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::AgentPromptDelivered { turn_id, ts: now },
-    );
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::CheckpointReached {
+    let _ = loop_state
+        .handle_event(&SessionEvent::AgentPromptDelivered { turn_id, ts: now })
+        .await;
+    let _ = loop_state
+        .handle_event(&SessionEvent::CheckpointReached {
             checkpoint_id: CheckpointId(Uuid::new_v4()),
             interrupt: Some(InterruptSnapshot::Pause),
             ts: now,
-        },
-    );
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnCompleted {
+        })
+        .await;
+    let _ = loop_state
+        .handle_event(&SessionEvent::TurnCompleted {
             turn_id,
             stop_reason: "end_turn".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
 
     let log = driver.log.lock().expect("log");
     assert!(
@@ -406,39 +411,33 @@ fn checkpoint_pause_calls_pause() {
     );
 }
 
-#[test]
-fn checkpoint_hitl_does_not_auto_prompt() {
+#[tokio::test]
+async fn checkpoint_hitl_does_not_auto_prompt() {
     let driver = FakeDriver::default();
-    let agent_id = AgentId::new();
-    let session_id = Uuid::new_v4();
-    let mut sup = SessionSupervisor::new_for_test();
-    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+    let mut loop_state = fresh_loop(driver.clone());
 
     let turn_id = Uuid::new_v4();
     let now = Utc::now();
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::AgentPromptDelivered { turn_id, ts: now },
-    );
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::CheckpointReached {
+    let _ = loop_state
+        .handle_event(&SessionEvent::AgentPromptDelivered { turn_id, ts: now })
+        .await;
+    let _ = loop_state
+        .handle_event(&SessionEvent::CheckpointReached {
             checkpoint_id: CheckpointId(Uuid::new_v4()),
             interrupt: Some(InterruptSnapshot::Hitl {
                 question: "?".into(),
                 options: vec![],
             }),
             ts: now,
-        },
-    );
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnCompleted {
+        })
+        .await;
+    let _ = loop_state
+        .handle_event(&SessionEvent::TurnCompleted {
             turn_id,
             stop_reason: "end_turn".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
 
     let log = driver.log.lock().expect("log");
     assert!(
@@ -448,25 +447,21 @@ fn checkpoint_hitl_does_not_auto_prompt() {
     );
 }
 
-#[test]
-fn prompt_delivery_failed_does_not_block_next_cycle() {
+#[tokio::test]
+async fn prompt_delivery_failed_does_not_block_next_cycle() {
     let driver = FakeDriver::default();
-    let agent_id = AgentId::new();
-    let session_id = Uuid::new_v4();
-    let mut sup = SessionSupervisor::new_for_test();
-    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+    let mut loop_state = fresh_loop(driver.clone());
 
     let turn_id = Uuid::new_v4();
     let now = Utc::now();
     // Failure before any turn completed.
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::PromptDeliveryFailed {
+    let _ = loop_state
+        .handle_event(&SessionEvent::PromptDeliveryFailed {
             turn_id,
             reason: "stdin".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
     {
         let log = driver.log.lock().expect("log");
         assert!(
@@ -478,29 +473,26 @@ fn prompt_delivery_failed_does_not_block_next_cycle() {
 
     // Subsequent (delivered, checkpoint, completed) cycle must still produce send_turn.
     let new_turn = Uuid::new_v4();
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::AgentPromptDelivered {
+    let _ = loop_state
+        .handle_event(&SessionEvent::AgentPromptDelivered {
             turn_id: new_turn,
             ts: now,
-        },
-    );
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::CheckpointReached {
+        })
+        .await;
+    let _ = loop_state
+        .handle_event(&SessionEvent::CheckpointReached {
             checkpoint_id: CheckpointId(Uuid::new_v4()),
             interrupt: None,
             ts: now,
-        },
-    );
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnCompleted {
+        })
+        .await;
+    let _ = loop_state
+        .handle_event(&SessionEvent::TurnCompleted {
             turn_id: new_turn,
             stop_reason: "end_turn".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
     let log = driver.log.lock().expect("log");
     let n = log
         .actions
@@ -514,26 +506,22 @@ fn prompt_delivery_failed_does_not_block_next_cycle() {
     );
 }
 
-#[test]
-fn supervisor_ignores_turn_completed_for_unrelated_turn() {
+#[tokio::test]
+async fn supervisor_ignores_turn_completed_for_unrelated_turn() {
     let driver = FakeDriver::default();
-    let agent_id = AgentId::new();
-    let session_id = Uuid::new_v4();
-    let mut sup = SessionSupervisor::new_for_test();
-    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+    let mut loop_state = fresh_loop(driver.clone());
 
     let turn_a = Uuid::new_v4();
     let turn_b = Uuid::new_v4();
     let now = Utc::now();
 
     // Open turn A.
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::AgentPromptDelivered {
+    let _ = loop_state
+        .handle_event(&SessionEvent::AgentPromptDelivered {
             turn_id: turn_a,
             ts: now,
-        },
-    );
+        })
+        .await;
 
     let prompts_before = driver
         .log
@@ -545,14 +533,13 @@ fn supervisor_ignores_turn_completed_for_unrelated_turn() {
         .count();
 
     // Inject TurnCompleted for an unrelated turn B — must be ignored.
-    let action = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnCompleted {
+    let action = loop_state
+        .handle_event(&SessionEvent::TurnCompleted {
             turn_id: turn_b,
             stop_reason: "end_turn".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
 
     assert!(matches!(action, SupervisorAction::Idle));
     let prompts_after = driver
@@ -569,66 +556,66 @@ fn supervisor_ignores_turn_completed_for_unrelated_turn() {
     );
 
     // The awaited turn A must still close cleanly and trigger the prompt.
-    let action = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnCompleted {
+    let action = loop_state
+        .handle_event(&SessionEvent::TurnCompleted {
             turn_id: turn_a,
             stop_reason: "end_turn".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
     assert!(
         matches!(action, SupervisorAction::PromptedAgent),
         "TurnCompleted for the awaited turn must clear and prompt; got {action:?}",
     );
 }
 
-#[test]
-fn supervisor_ignores_turn_aborted_for_unrelated_turn() {
+#[tokio::test]
+async fn supervisor_ignores_turn_aborted_for_unrelated_turn() {
     let driver = FakeDriver::default();
-    let agent_id = AgentId::new();
-    let session_id = Uuid::new_v4();
-    let mut sup = SessionSupervisor::new_for_test();
-    sup.attach_session_for_test(agent_id, session_id, driver.clone());
+    let mut loop_state = fresh_loop(driver.clone());
 
     let turn_a = Uuid::new_v4();
     let turn_b = Uuid::new_v4();
     let now = Utc::now();
 
     // Open turn A.
-    let _ = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::AgentPromptDelivered {
+    let _ = loop_state
+        .handle_event(&SessionEvent::AgentPromptDelivered {
             turn_id: turn_a,
             ts: now,
-        },
-    );
+        })
+        .await;
 
     // Stale TurnAborted for turn B must not clear the await for turn A.
-    let action = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnAborted {
+    let action = loop_state
+        .handle_event(&SessionEvent::TurnAborted {
             turn_id: turn_b,
             reason: "stale".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
     assert!(matches!(action, SupervisorAction::Idle));
 
     // Turn A's TurnCompleted must still trigger the prompt — proves the
     // unrelated abort did not clear `awaiting_turn_completion`.
-    let action = sup.handle_event_for_test(
-        session_id,
-        &SessionEvent::TurnCompleted {
+    let action = loop_state
+        .handle_event(&SessionEvent::TurnCompleted {
             turn_id: turn_a,
             stop_reason: "end_turn".into(),
             ts: now,
-        },
-    );
+        })
+        .await;
     assert!(
         matches!(action, SupervisorAction::PromptedAgent),
         "stale TurnAborted should not have cleared the active turn's await; got {action:?}",
     );
+}
+
+// `run_case` is exercised inline via the proptest closure above; expose it
+// here so dead-code analysis doesn't trip when the proptest is filtered out.
+#[allow(dead_code)]
+fn _run_case_compiles(events: &[SessionEvent]) -> Vec<RecordedAction> {
+    run_case(events)
 }
 
 // Suppress unused-variant warning on `SupervisorAction` if the supervisor

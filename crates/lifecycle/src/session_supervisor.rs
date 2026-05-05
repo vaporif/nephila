@@ -13,23 +13,48 @@
 //! decides whether to continue. `PromptDeliveryFailed` is logged but does
 //! not block the next checkpoint cycle.
 //!
-//! The supervisor uses a `SessionDriver` trait so tests can substitute a
-//! call-recording fake. The production impl wraps `Arc<ClaudeCodeSession>`
-//! in a thin shim that translates the trait calls into `send_turn` / `pause` /
-//! `shutdown`.
+//! The supervisor is sharded: each attached session owns its own
+//! [`PerSessionLoop`] task; there is no shared map of per-session state. The
+//! outer [`SessionSupervisor`] is a thin registry of `JoinHandle`s used for
+//! shutdown.
+//!
+//! The supervisor uses a [`SessionDriver`] trait so tests can substitute a
+//! call-recording fake. The production impl
+//! ([`crate::claude_code_driver::ClaudeCodeDriver`]) wraps
+//! `Arc<ClaudeCodeSession>` and translates the trait calls into
+//! `send_turn` / `pause` / `shutdown_in_place`.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use futures::StreamExt;
 use nephila_core::config::SupervisionConfig;
 use nephila_core::id::AgentId;
 use nephila_core::session_event::{InterruptSnapshot, SessionEvent, SessionId, TurnId};
+use nephila_eventsourcing::store::EventStoreError;
 use nephila_store::SqliteStore;
 use nephila_store::resilient_subscribe::resilient_subscribe;
-use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 use crate::supervisor::RestartTracker;
+
+/// Errors surfaced by [`SessionDriver`] implementations. The supervisor
+/// transitions the session to [`SessionPhase::Crashed`] on any error and
+/// stops dispatching further driver calls for that session.
+#[derive(Debug, thiserror::Error)]
+pub enum DriverError {
+    /// The underlying claude child is no longer reachable (writer task closed,
+    /// pid gone, etc.).
+    #[error("process gone")]
+    ProcessGone,
+    /// IO failure during process control (signal delivery, fs writes).
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    /// Persisting the post-shutdown `SessionEnded` envelope failed.
+    #[error("persist: {0}")]
+    Persist(#[from] EventStoreError),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionPhase {
@@ -46,25 +71,6 @@ impl SessionPhase {
     }
 }
 
-/// Per-session state tracked by the supervisor.
-#[derive(Debug)]
-struct PerSession {
-    agent_id: AgentId,
-    /// The most recent `CheckpointReached` envelope for which we have not yet
-    /// observed the matching `TurnCompleted`. Cleared on `TurnCompleted` (and
-    /// driven by the (checkpoint, completed) pair).
-    last_checkpoint: Option<InterruptDecision>,
-    /// `Some(turn_id)` while a `*PromptDelivered` has fired and no
-    /// `TurnCompleted`/`TurnAborted`/`PromptDeliveryFailed` has closed it.
-    awaiting_turn_completion: Option<TurnId>,
-    phase: SessionPhase,
-    driver: Arc<dyn SessionDriver>,
-    /// Crash budget: incremented on `SessionCrashed`, cleared on
-    /// `SessionEnded`. The registry consults `record_restart()` before
-    /// respawning a crashed session.
-    restart_tracker: RestartTracker,
-}
-
 #[derive(Debug, Clone)]
 struct InterruptDecision {
     interrupt: Option<InterruptSnapshot>,
@@ -73,20 +79,30 @@ struct InterruptDecision {
 /// Abstracts the per-session control surface so the supervisor can be unit
 /// tested without spawning a real claude child process.
 ///
-/// All methods are sync and fire-and-forget: the production impl forwards
-/// each call into a `tokio::spawn` to avoid blocking the supervisor's loop on
-/// awaits across many sessions.
-pub trait SessionDriver: Send + Sync + std::fmt::Debug {
+/// Each method is `async` and returns a `Result<(), DriverError>`. Errors
+/// transition the session to [`SessionPhase::Crashed`]; the per-session loop
+/// then drains its subscription without dispatching further driver calls.
+///
+/// The trait uses RPITIT (return-position `impl Future`) rather than
+/// `async fn`, matching the existing `TaskConnector` pattern. Dispatch is
+/// monomorphic — each [`PerSessionLoop`] is generic over its `D: SessionDriver`,
+/// avoiding `Arc<dyn _>` and the dyn-compatibility limitations of async-fn-
+/// in-trait.
+pub trait SessionDriver: Send + Sync + std::fmt::Debug + 'static {
     /// Issue an autonomy prompt as `PromptSource::Agent`.
-    fn send_agent_prompt(&self, prompt: String);
+    fn send_agent_prompt(
+        &self,
+        prompt: String,
+    ) -> impl Future<Output = Result<(), DriverError>> + Send;
     /// SIGSTOP the underlying claude process.
-    fn pause(&self);
+    fn pause(&self) -> impl Future<Output = Result<(), DriverError>> + Send;
     /// Graceful shutdown — drain reader/writer, persist `SessionEnded`.
-    fn shutdown(&self);
+    fn shutdown(&self) -> impl Future<Output = Result<(), DriverError>> + Send;
 }
 
-/// Surfaced action for tracing / observability. Not used by the production
-/// loop directly — callers can choose to log it.
+/// Surfaced action for tracing / observability. Returned from
+/// [`PerSessionLoop::handle_event`] so tests can assert what the state machine
+/// chose to do without inspecting driver call logs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SupervisorAction {
     Idle,
@@ -99,181 +115,127 @@ pub enum SupervisorAction {
     Ended,
 }
 
-pub struct SessionSupervisor {
-    sessions: HashMap<SessionId, PerSession>,
-    supervision_config: SupervisionConfig,
-    store: Arc<SqliteStore>,
+/// Owns per-session state and runs the resilient-subscribe + event-routing
+/// loop for ONE session. Each spawned via [`SessionSupervisor::attach_session`]
+/// — there is no cross-session shared state.
+pub struct PerSessionLoop<D: SessionDriver> {
+    agent_id: AgentId,
+    session_id: SessionId,
+    /// The most recent `CheckpointReached` envelope for which we have not yet
+    /// observed the matching `TurnCompleted`. Cleared on `TurnCompleted`.
+    last_checkpoint: Option<InterruptDecision>,
+    /// `Some(turn_id)` while a `*PromptDelivered` has fired and no
+    /// `TurnCompleted`/`TurnAborted`/`PromptDeliveryFailed` has closed it.
+    awaiting_turn_completion: Option<TurnId>,
+    phase: SessionPhase,
+    driver: D,
+    /// Crash budget: incremented on `SessionCrashed`, cleared on
+    /// `SessionEnded`.
+    restart_tracker: RestartTracker,
 }
 
-impl std::fmt::Debug for SessionSupervisor {
+impl<D: SessionDriver> std::fmt::Debug for PerSessionLoop<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SessionSupervisor")
-            .field("session_count", &self.sessions.len())
-            .field("supervision_config", &self.supervision_config)
+        f.debug_struct("PerSessionLoop")
+            .field("agent_id", &self.agent_id)
+            .field("session_id", &self.session_id)
+            .field("phase", &self.phase)
+            .field("awaiting_turn_completion", &self.awaiting_turn_completion)
             .finish_non_exhaustive()
     }
 }
 
-impl SessionSupervisor {
+impl<D: SessionDriver> PerSessionLoop<D> {
     #[must_use]
-    pub fn new(store: Arc<SqliteStore>, supervision_config: SupervisionConfig) -> Self {
-        Self {
-            sessions: HashMap::new(),
-            supervision_config,
-            store,
-        }
-    }
-
-    /// Accessor for the store used by [`run_per_session`] when re-anchoring
-    /// the per-session subscription.
-    #[must_use]
-    pub fn store(&self) -> Arc<SqliteStore> {
-        Arc::clone(&self.store)
-    }
-
-    /// Test-only constructor. Spins up an in-memory store so the proptest
-    /// harness can exercise the state machine without a tempdir or real
-    /// `subscribe_after` plumbing.
-    #[must_use]
-    pub fn new_for_test() -> Self {
-        let store = Arc::new(SqliteStore::open_in_memory(384).expect("test store opens in-memory"));
-        Self::new(store, SupervisionConfig::default())
-    }
-
-    /// Test seam: register a session with a fake driver before driving events.
-    /// Production callers go through `attach_session` (no `_for_test` suffix).
-    pub fn attach_session_for_test<D: SessionDriver + 'static>(
-        &mut self,
+    pub fn new(
         agent_id: AgentId,
         session_id: SessionId,
         driver: D,
-    ) {
-        self.attach_session(agent_id, session_id, Arc::new(driver));
-    }
-
-    /// Register a session with the supervisor.
-    pub fn attach_session(
-        &mut self,
-        agent_id: AgentId,
-        session_id: SessionId,
-        driver: Arc<dyn SessionDriver>,
-    ) {
-        self.sessions.insert(
+        supervision_config: SupervisionConfig,
+    ) -> Self {
+        Self {
+            agent_id,
             session_id,
-            PerSession {
-                agent_id,
-                last_checkpoint: None,
-                awaiting_turn_completion: None,
-                phase: SessionPhase::Running,
-                driver,
-                restart_tracker: RestartTracker::new(self.supervision_config.clone()),
-            },
-        );
-    }
-
-    /// Test-only event handler. Production loop reads events through
-    /// `resilient_subscribe` and routes them through the same state machine.
-    pub fn handle_event_for_test(
-        &mut self,
-        session_id: SessionId,
-        event: &SessionEvent,
-    ) -> SupervisorAction {
-        self.handle_event(session_id, event)
+            last_checkpoint: None,
+            awaiting_turn_completion: None,
+            phase: SessionPhase::Running,
+            driver,
+            restart_tracker: RestartTracker::new(supervision_config),
+        }
     }
 
     /// Drive the per-session state machine on an incoming `SessionEvent`.
     ///
-    /// Returns the action taken (for tracing/test assertions). The action's
-    /// side effect (e.g. a `send_agent_prompt` call into the `SessionDriver`)
-    /// has already been issued by the time this returns.
-    pub fn handle_event(
-        &mut self,
-        session_id: SessionId,
-        event: &SessionEvent,
-    ) -> SupervisorAction {
-        let Some(state) = self.sessions.get_mut(&session_id) else {
-            tracing::debug!(%session_id, "event for unattached session — ignoring");
-            return SupervisorAction::Idle;
-        };
-
-        if state.phase.is_terminal() {
-            tracing::debug!(%session_id, ?event, "event after terminal phase — ignoring");
+    /// On a state transition that requires a driver call (auto-prompt, pause,
+    /// shutdown), this awaits the call and routes the result. A
+    /// [`DriverError`] transitions the session to [`SessionPhase::Crashed`]
+    /// and is logged via `tracing::error!`.
+    ///
+    /// Returns the action taken (for tracing/test assertions).
+    pub async fn handle_event(&mut self, event: &SessionEvent) -> SupervisorAction {
+        if self.phase.is_terminal() {
+            tracing::debug!(session_id = %self.session_id, ?event, "event after terminal phase — ignoring");
             return SupervisorAction::Idle;
         }
 
         match event {
             SessionEvent::AgentPromptDelivered { turn_id, .. }
             | SessionEvent::HumanPromptDelivered { turn_id, .. } => {
-                state.awaiting_turn_completion = Some(*turn_id);
+                self.awaiting_turn_completion = Some(*turn_id);
                 SupervisorAction::Idle
             }
             SessionEvent::CheckpointReached { interrupt, .. } => {
-                state.last_checkpoint = Some(InterruptDecision {
+                self.last_checkpoint = Some(InterruptDecision {
                     interrupt: interrupt.clone(),
                 });
                 SupervisorAction::Idle
             }
             SessionEvent::TurnCompleted { turn_id, .. } => {
-                if state.awaiting_turn_completion != Some(*turn_id) {
+                if self.awaiting_turn_completion != Some(*turn_id) {
                     tracing::debug!(
-                        %session_id,
+                        session_id = %self.session_id,
                         %turn_id,
-                        awaiting = ?state.awaiting_turn_completion,
+                        awaiting = ?self.awaiting_turn_completion,
                         "TurnCompleted for unrelated turn; ignoring",
                     );
                     return SupervisorAction::Idle;
                 }
-                state.awaiting_turn_completion = None;
-                let cp = state.last_checkpoint.take();
-                let agent_id = state.agent_id;
+                self.awaiting_turn_completion = None;
+                let cp = self.last_checkpoint.take();
                 match cp {
                     Some(InterruptDecision { interrupt }) => match interrupt {
-                        None => {
-                            let prompt = compose_continuation_prompt(agent_id);
-                            state.driver.send_agent_prompt(prompt);
-                            SupervisorAction::PromptedAgent
-                        }
+                        None => self.dispatch_continuation_prompt().await,
                         Some(InterruptSnapshot::Hitl { .. }) => {
-                            state.phase = SessionPhase::WaitingHitl;
+                            self.phase = SessionPhase::WaitingHitl;
                             SupervisorAction::HitlAwaiting
                         }
-                        Some(InterruptSnapshot::Pause) => {
-                            state.phase = SessionPhase::Paused;
-                            state.driver.pause();
-                            SupervisorAction::Paused
-                        }
-                        Some(InterruptSnapshot::Drain) => {
-                            state.phase = SessionPhase::Ended;
-                            state.driver.shutdown();
-                            SupervisorAction::ShutdownRequested
-                        }
+                        Some(InterruptSnapshot::Pause) => self.dispatch_pause().await,
+                        Some(InterruptSnapshot::Drain) => self.dispatch_shutdown().await,
                     },
                     None => {
                         // Steady-state autonomy — turn closed without an
                         // explicit checkpoint in this loop iteration. Compose
                         // next prompt regardless.
-                        let prompt = compose_continuation_prompt(agent_id);
-                        state.driver.send_agent_prompt(prompt);
-                        SupervisorAction::PromptedAgent
+                        self.dispatch_continuation_prompt().await
                     }
                 }
             }
             SessionEvent::TurnAborted {
                 turn_id, reason, ..
             } => {
-                if state.awaiting_turn_completion != Some(*turn_id) {
+                if self.awaiting_turn_completion != Some(*turn_id) {
                     tracing::debug!(
-                        %session_id,
+                        session_id = %self.session_id,
                         %turn_id,
-                        awaiting = ?state.awaiting_turn_completion,
+                        awaiting = ?self.awaiting_turn_completion,
                         "TurnAborted for unrelated turn; ignoring",
                     );
                     return SupervisorAction::Idle;
                 }
-                state.awaiting_turn_completion = None;
-                state.last_checkpoint = None;
+                self.awaiting_turn_completion = None;
+                self.last_checkpoint = None;
                 tracing::warn!(
-                    %session_id,
+                    session_id = %self.session_id,
                     %turn_id,
                     %reason,
                     "TurnAborted — recoverable; not auto-prompting",
@@ -284,7 +246,7 @@ impl SessionSupervisor {
                 turn_id, reason, ..
             } => {
                 tracing::warn!(
-                    %session_id,
+                    session_id = %self.session_id,
                     %turn_id,
                     %reason,
                     "PromptDeliveryFailed — next CheckpointReached cycle will retry",
@@ -294,21 +256,21 @@ impl SessionSupervisor {
             SessionEvent::SessionCrashed {
                 reason, exit_code, ..
             } => {
-                state.phase = SessionPhase::Crashed;
-                let allowed = state.restart_tracker.record_restart();
+                self.phase = SessionPhase::Crashed;
+                let allowed = self.restart_tracker.record_restart();
                 tracing::error!(
-                    %session_id,
+                    session_id = %self.session_id,
                     %reason,
                     ?exit_code,
                     restart_allowed = allowed,
-                    restart_count = state.restart_tracker.restart_count(),
+                    restart_count = self.restart_tracker.restart_count(),
                     "session crashed",
                 );
                 SupervisorAction::Crashed
             }
             SessionEvent::SessionEnded { .. } => {
-                state.phase = SessionPhase::Ended;
-                state.restart_tracker.reset();
+                self.phase = SessionPhase::Ended;
+                self.restart_tracker.reset();
                 SupervisorAction::Ended
             }
             // The remaining events are observability-only as far as autonomy
@@ -317,47 +279,190 @@ impl SessionSupervisor {
         }
     }
 
+    async fn dispatch_continuation_prompt(&mut self) -> SupervisorAction {
+        let prompt = compose_continuation_prompt(self.agent_id);
+        match self.driver.send_agent_prompt(prompt).await {
+            Ok(()) => SupervisorAction::PromptedAgent,
+            Err(e) => {
+                tracing::error!(
+                    session_id = %self.session_id,
+                    error = %e,
+                    "send_agent_prompt failed; transitioning to Crashed",
+                );
+                self.phase = SessionPhase::Crashed;
+                SupervisorAction::Crashed
+            }
+        }
+    }
+
+    async fn dispatch_pause(&mut self) -> SupervisorAction {
+        match self.driver.pause().await {
+            Ok(()) => {
+                self.phase = SessionPhase::Paused;
+                SupervisorAction::Paused
+            }
+            Err(e) => {
+                tracing::error!(
+                    session_id = %self.session_id,
+                    error = %e,
+                    "pause failed; transitioning to Crashed",
+                );
+                self.phase = SessionPhase::Crashed;
+                SupervisorAction::Crashed
+            }
+        }
+    }
+
+    async fn dispatch_shutdown(&mut self) -> SupervisorAction {
+        match self.driver.shutdown().await {
+            Ok(()) => {
+                self.phase = SessionPhase::Ended;
+                SupervisorAction::ShutdownRequested
+            }
+            Err(e) => {
+                tracing::error!(
+                    session_id = %self.session_id,
+                    error = %e,
+                    "shutdown failed; transitioning to Crashed",
+                );
+                self.phase = SessionPhase::Crashed;
+                SupervisorAction::Crashed
+            }
+        }
+    }
+
+    /// Drive a single session's event stream into this loop.
+    ///
+    /// Subscribes to `("session", session_id, since=0)` via
+    /// [`resilient_subscribe`] and routes each `SessionEvent` envelope
+    /// through [`Self::handle_event`]. Returns when:
+    ///   - the upstream stream closes (clean session shutdown), OR
+    ///   - the per-session loop transitions to a terminal phase
+    ///     ([`SessionPhase::Ended`] or [`SessionPhase::Crashed`]), OR
+    ///   - a non-recoverable subscribe error (`PersistentLag`, etc.).
+    #[tracing::instrument(level = "debug", skip(self, store), fields(session_id = %self.session_id))]
+    pub async fn run(&mut self, store: Arc<SqliteStore>) {
+        let mut stream = Box::pin(resilient_subscribe(
+            store,
+            "session".into(),
+            self.session_id.to_string(),
+            0,
+        ));
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(env) => match serde_json::from_value::<SessionEvent>(env.payload.clone()) {
+                    Ok(ev) => {
+                        let _ = self.handle_event(&ev).await;
+                        if self.phase.is_terminal() {
+                            tracing::debug!(
+                                session_id = %self.session_id,
+                                phase = ?self.phase,
+                                "per-session loop reached terminal phase; exiting",
+                            );
+                            return;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(session_id = %self.session_id, error = %e, "decode SessionEvent failed");
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(session_id = %self.session_id, error = %e, "subscribe stream error; ending loop");
+                    return;
+                }
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn phase(&self) -> SessionPhase {
+        self.phase
+    }
+}
+
+/// Thin registry of per-session task handles. There is no shared per-session
+/// state — each call to [`Self::attach_session`] spawns a [`PerSessionLoop`]
+/// task that owns its own state.
+pub struct SessionSupervisor {
+    handles: HashMap<SessionId, JoinHandle<()>>,
+    supervision_config: SupervisionConfig,
+    store: Arc<SqliteStore>,
+}
+
+impl std::fmt::Debug for SessionSupervisor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionSupervisor")
+            .field("session_count", &self.handles.len())
+            .field("supervision_config", &self.supervision_config)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SessionSupervisor {
+    #[must_use]
+    pub fn new(store: Arc<SqliteStore>, supervision_config: SupervisionConfig) -> Self {
+        Self {
+            handles: HashMap::new(),
+            supervision_config,
+            store,
+        }
+    }
+
+    /// Accessor for the store (used by the autonomy task entry point in
+    /// `bin/src/main.rs`).
+    #[must_use]
+    pub fn store(&self) -> Arc<SqliteStore> {
+        Arc::clone(&self.store)
+    }
+
+    /// Spawn a per-session task that drives the session-event stream through
+    /// a fresh [`PerSessionLoop`]. The driver is moved into the spawned task —
+    /// no `Arc<dyn _>` indirection.
+    ///
+    /// If a task is already attached for `session_id`, it is replaced (the
+    /// old `JoinHandle` is dropped, which detaches but does not abort it —
+    /// callers expecting respawn semantics should call [`Self::detach_session`]
+    /// first).
+    pub fn attach_session<D: SessionDriver>(
+        &mut self,
+        agent_id: AgentId,
+        session_id: SessionId,
+        driver: D,
+    ) {
+        let store = Arc::clone(&self.store);
+        let cfg = self.supervision_config.clone();
+        let handle = tokio::spawn(async move {
+            let mut loop_state = PerSessionLoop::new(agent_id, session_id, driver, cfg);
+            loop_state.run(store).await;
+        });
+        self.handles.insert(session_id, handle);
+    }
+
+    /// Abort and forget the per-session task for `session_id`, if any.
+    pub fn detach_session(&mut self, session_id: SessionId) {
+        if let Some(handle) = self.handles.remove(&session_id) {
+            handle.abort();
+        }
+    }
+
+    /// Forget the per-session task entry without aborting.
     pub fn forget_session(&mut self, session_id: SessionId) {
-        self.sessions.remove(&session_id);
+        self.handles.remove(&session_id);
     }
 
     #[must_use]
     pub fn session_count(&self) -> usize {
-        self.sessions.len()
+        self.handles.len()
     }
-}
 
-/// Drive a single session's event stream into a shared `SessionSupervisor`.
-///
-/// Subscribes to `("session", session_id, since=0)` via
-/// [`resilient_subscribe`] and routes each `SessionEvent` envelope through
-/// [`SessionSupervisor::handle_event`]. Returns when the upstream stream
-/// closes (clean session shutdown) or yields a non-recoverable error.
-///
-/// The supervisor is shared across many such tasks via `Arc<Mutex<_>>`; each
-/// task locks briefly per event to dispatch and never holds the lock across
-/// `.await` boundaries (the `subscribe` `.next()` call happens BEFORE the
-/// lock is acquired). The store handle is read once at task entry under a
-/// short-lived lock and reused for the lifetime of the subscription.
-#[tracing::instrument(level = "debug", skip(supervisor), fields(session_id = %session_id))]
-pub async fn run_per_session(supervisor: Arc<Mutex<SessionSupervisor>>, session_id: SessionId) {
-    let store = supervisor.lock().await.store();
-    let mut stream = resilient_subscribe(store, "session".into(), session_id.to_string(), 0);
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(env) => match serde_json::from_value::<SessionEvent>(env.payload.clone()) {
-                Ok(ev) => {
-                    let mut guard = supervisor.lock().await;
-                    let _ = guard.handle_event(session_id, &ev);
-                }
-                Err(e) => {
-                    tracing::warn!(%session_id, error = %e, "decode SessionEvent failed");
-                }
-            },
-            Err(e) => {
-                tracing::warn!(%session_id, error = %e, "subscribe stream error; ending loop");
-                return;
-            }
+    /// Abort all per-session tasks and drop their handles. Idempotent.
+    pub async fn shutdown_all(&mut self) {
+        let handles: Vec<_> = self.handles.drain().map(|(_, h)| h).collect();
+        for h in &handles {
+            h.abort();
+        }
+        for h in handles {
+            let _ = h.await;
         }
     }
 }
@@ -391,159 +496,186 @@ mod tests {
     }
 
     impl SessionDriver for RecorderDriver {
-        fn send_agent_prompt(&self, prompt: String) {
+        async fn send_agent_prompt(&self, prompt: String) -> Result<(), DriverError> {
             self.prompts.lock().unwrap().push(prompt);
+            Ok(())
         }
-        fn pause(&self) {
+        async fn pause(&self) -> Result<(), DriverError> {
             *self.pauses.lock().unwrap() += 1;
+            Ok(())
         }
-        fn shutdown(&self) {
+        async fn shutdown(&self) -> Result<(), DriverError> {
             *self.shutdowns.lock().unwrap() += 1;
+            Ok(())
         }
     }
 
-    #[test]
-    fn unattached_session_is_idle() {
-        let mut sup = SessionSupervisor::new_for_test();
-        let session_id = Uuid::new_v4();
-        let action = sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::TurnCompleted {
-                turn_id: Uuid::new_v4(),
-                stop_reason: "end_turn".into(),
-                ts: Utc::now(),
-            },
-        );
-        assert_eq!(action, SupervisorAction::Idle);
+    fn fresh_loop(driver: RecorderDriver) -> PerSessionLoop<RecorderDriver> {
+        PerSessionLoop::new(
+            AgentId::new(),
+            Uuid::new_v4(),
+            driver,
+            SupervisionConfig::default(),
+        )
     }
 
-    #[test]
-    fn checkpoint_none_then_completed_prompts_agent() {
+    #[tokio::test]
+    async fn checkpoint_none_then_completed_prompts_agent() {
         let driver = RecorderDriver::default();
-        let mut sup = SessionSupervisor::new_for_test();
-        let agent_id = AgentId::new();
-        let session_id = Uuid::new_v4();
-        sup.attach_session_for_test(agent_id, session_id, driver.clone());
+        let mut loop_state = fresh_loop(driver.clone());
 
         let turn_id = Uuid::new_v4();
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::AgentPromptDelivered {
+        loop_state
+            .handle_event(&SessionEvent::AgentPromptDelivered {
                 turn_id,
                 ts: Utc::now(),
-            },
-        );
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::CheckpointReached {
+            })
+            .await;
+        loop_state
+            .handle_event(&SessionEvent::CheckpointReached {
                 checkpoint_id: CheckpointId(Uuid::new_v4()),
                 interrupt: None,
                 ts: Utc::now(),
-            },
-        );
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::TurnCompleted {
+            })
+            .await;
+        loop_state
+            .handle_event(&SessionEvent::TurnCompleted {
                 turn_id,
                 stop_reason: "end_turn".into(),
                 ts: Utc::now(),
-            },
-        );
+            })
+            .await;
         assert_eq!(driver.prompts.lock().unwrap().len(), 1);
     }
 
-    #[test]
-    fn turn_aborted_does_not_prompt() {
+    #[tokio::test]
+    async fn turn_aborted_does_not_prompt() {
         let driver = RecorderDriver::default();
-        let mut sup = SessionSupervisor::new_for_test();
-        let session_id = Uuid::new_v4();
-        sup.attach_session_for_test(AgentId::new(), session_id, driver.clone());
+        let mut loop_state = fresh_loop(driver.clone());
 
         let turn_id = Uuid::new_v4();
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::AgentPromptDelivered {
+        loop_state
+            .handle_event(&SessionEvent::AgentPromptDelivered {
                 turn_id,
                 ts: Utc::now(),
-            },
-        );
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::TurnAborted {
+            })
+            .await;
+        loop_state
+            .handle_event(&SessionEvent::TurnAborted {
                 turn_id,
                 reason: "x".into(),
                 ts: Utc::now(),
-            },
-        );
+            })
+            .await;
         assert!(driver.prompts.lock().unwrap().is_empty());
     }
 
-    #[test]
-    fn drain_interrupt_calls_shutdown() {
+    #[tokio::test]
+    async fn drain_interrupt_calls_shutdown() {
         let driver = RecorderDriver::default();
-        let mut sup = SessionSupervisor::new_for_test();
-        let session_id = Uuid::new_v4();
-        sup.attach_session_for_test(AgentId::new(), session_id, driver.clone());
+        let mut loop_state = fresh_loop(driver.clone());
 
         let turn_id = Uuid::new_v4();
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::AgentPromptDelivered {
+        loop_state
+            .handle_event(&SessionEvent::AgentPromptDelivered {
                 turn_id,
                 ts: Utc::now(),
-            },
-        );
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::CheckpointReached {
+            })
+            .await;
+        loop_state
+            .handle_event(&SessionEvent::CheckpointReached {
                 checkpoint_id: CheckpointId(Uuid::new_v4()),
                 interrupt: Some(InterruptSnapshot::Drain),
                 ts: Utc::now(),
-            },
-        );
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::TurnCompleted {
+            })
+            .await;
+        loop_state
+            .handle_event(&SessionEvent::TurnCompleted {
                 turn_id,
                 stop_reason: "end_turn".into(),
                 ts: Utc::now(),
-            },
-        );
+            })
+            .await;
         assert_eq!(*driver.shutdowns.lock().unwrap(), 1);
         assert!(driver.prompts.lock().unwrap().is_empty());
     }
 
-    #[test]
-    fn pause_interrupt_calls_pause() {
+    #[tokio::test]
+    async fn pause_interrupt_calls_pause() {
         let driver = RecorderDriver::default();
-        let mut sup = SessionSupervisor::new_for_test();
-        let session_id = Uuid::new_v4();
-        sup.attach_session_for_test(AgentId::new(), session_id, driver.clone());
+        let mut loop_state = fresh_loop(driver.clone());
 
         let turn_id = Uuid::new_v4();
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::AgentPromptDelivered {
+        loop_state
+            .handle_event(&SessionEvent::AgentPromptDelivered {
                 turn_id,
                 ts: Utc::now(),
-            },
-        );
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::CheckpointReached {
+            })
+            .await;
+        loop_state
+            .handle_event(&SessionEvent::CheckpointReached {
                 checkpoint_id: CheckpointId(Uuid::new_v4()),
                 interrupt: Some(InterruptSnapshot::Pause),
                 ts: Utc::now(),
-            },
-        );
-        sup.handle_event_for_test(
-            session_id,
-            &SessionEvent::TurnCompleted {
+            })
+            .await;
+        loop_state
+            .handle_event(&SessionEvent::TurnCompleted {
                 turn_id,
                 stop_reason: "end_turn".into(),
                 ts: Utc::now(),
-            },
-        );
+            })
+            .await;
         assert_eq!(*driver.pauses.lock().unwrap(), 1);
+    }
+
+    /// Driver error during auto-prompt transitions the session to `Crashed`
+    /// and stops further dispatch.
+    #[tokio::test]
+    async fn driver_error_transitions_to_crashed() {
+        #[derive(Debug, Default)]
+        struct FailingDriver;
+        impl SessionDriver for FailingDriver {
+            async fn send_agent_prompt(&self, _prompt: String) -> Result<(), DriverError> {
+                Err(DriverError::ProcessGone)
+            }
+            async fn pause(&self) -> Result<(), DriverError> {
+                Err(DriverError::ProcessGone)
+            }
+            async fn shutdown(&self) -> Result<(), DriverError> {
+                Err(DriverError::ProcessGone)
+            }
+        }
+
+        let mut loop_state = PerSessionLoop::new(
+            AgentId::new(),
+            Uuid::new_v4(),
+            FailingDriver,
+            SupervisionConfig::default(),
+        );
+
+        let turn_id = Uuid::new_v4();
+        loop_state
+            .handle_event(&SessionEvent::AgentPromptDelivered {
+                turn_id,
+                ts: Utc::now(),
+            })
+            .await;
+        loop_state
+            .handle_event(&SessionEvent::CheckpointReached {
+                checkpoint_id: CheckpointId(Uuid::new_v4()),
+                interrupt: None,
+                ts: Utc::now(),
+            })
+            .await;
+        let action = loop_state
+            .handle_event(&SessionEvent::TurnCompleted {
+                turn_id,
+                stop_reason: "end_turn".into(),
+                ts: Utc::now(),
+            })
+            .await;
+        assert_eq!(action, SupervisorAction::Crashed);
+        assert_eq!(loop_state.phase(), SessionPhase::Crashed);
     }
 }
